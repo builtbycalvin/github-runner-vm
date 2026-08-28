@@ -1,0 +1,62 @@
+minimumLimaVersion: 2.2.0
+vmType: vz
+os: Linux
+arch: aarch64
+cpus: 4
+memory: 8GiB
+disk: 80GiB
+images:
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260705/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+    digest: sha256:7df0201546f75b8bcc1044594c806c35749421ad3c9bc1be2a3ab806cfae39cc
+user:
+  name: limaadmin
+  comment: VM administrator
+  uid: 1000
+  home: /home/limaadmin
+  shell: /bin/bash
+  passwordlessSudo: true
+mounts: []
+mountInotify: false
+ssh:
+  forwardAgent: false
+  forwardX11: false
+  loadDotSSHPubKeys: false
+containerd:
+  system: false
+  user: false
+portForwards:
+  - guestPortRange: [1, 65535]
+    proto: any
+    ignore: true
+networks: []
+hostResolver:
+  enabled: false
+dns: [1.1.1.1, 1.0.0.1]
+propagateProxyEnv: false
+env: {}
+caCerts:
+  files: []
+  certs: []
+rosetta:
+  enabled: false
+  binfmt: false
+upgradePackages: false
+provision:
+  - mode: data
+    path: /etc/systemd/user/ci-vm-runner.service
+    file: ci-vm-runner.service
+    owner: root:root
+    permissions: "0644"
+    overwrite: false
+  - mode: system
+    file: provision.sh
+probes:
+  - mode: readiness
+    description: CI account and rootless Docker
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      test "$(sudo cat /var/lib/ci-vm/provision-version)" = 1
+      test "$(id -u ci)" = 1001
+      sudo runuser -u ci -- env XDG_RUNTIME_DIR=/run/user/1001 DOCKER_HOST=unix:///run/user/1001/docker.sock docker info | grep -q rootless

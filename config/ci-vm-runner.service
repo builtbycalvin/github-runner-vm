@@ -1,0 +1,26 @@
+[Unit]
+Description=GitHub runner with cooperative pause
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+ExitType=cgroup
+WorkingDirectory=/home/ci/actions-runner
+ExecCondition=/usr/bin/test ! -e /var/lib/ci-vm/paused
+ExecStart=/home/ci/actions-runner/bin/Runner.Listener run --once
+Restart=always
+RestartSec=5
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=infinity
+Environment=HOME=/home/ci
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+Environment=DOCKER_HOST=unix:///run/user/1001/docker.sock
+Environment=PATH=/home/ci/.local/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=SSH_AUTH_SOCK DOCKER_CONTEXT HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,28 @@
+name: Runner smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: runner-smoke
+  cancel-in-progress: false
+jobs:
+  smoke:
+    runs-on: [self-hosted, Linux, ARM64, spare-mac]
+    timeout-minutes: 5
+    steps:
+      - name: Verify guest identity and Docker
+        shell: bash
+        env:
+          EXPECTED_RUNNER: spare-mac-arm64
+        run: |
+          set -euo pipefail
+          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
+          test "$RUNNER_OS:$RUNNER_ARCH" = Linux:ARM64
+          test "$(uname -m)" = aarch64
+          test "$(id -u):$(id -un):$(id -Gn)" = 1001:ci:ci
+          test "$DOCKER_HOST" = unix:///run/user/1001/docker.sock
+          test -z "${SSH_AUTH_SOCK:-}"
+          test ! -S /var/run/docker.sock
+          docker info --format '{{json .SecurityOptions}}' | grep -q rootless
+          printf 'runner=%s os=%s arch=%s\n' "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
