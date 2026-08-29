@@ -1,179 +1,96 @@
 # github-runner-vm
 
-Turn a spare Apple Silicon Mac into a GitHub Actions runner inside a Lima Linux VM.
-GitHub handles triggers, scheduling, logs, and PR checks. The VM executes jobs.
-This project installs a small `ci-vm` maintenance command. It does not emulate workflows.
+Give your AI agent a repository. It sets up a Linux VM on your Apple Silicon Mac for that repository's GitHub Actions jobs.
+GitHub keeps the triggers, logs, and checks. Your Mac runs the jobs.
 
-**Use this with trusted code, preferably in a private repository.** A persistent runner keeps files and Docker data between jobs.
-Public fork contributions must not automatically execute on it. This public project's own CI uses GitHub-hosted runners only.
+## Set it up through your agent
 
-## Before you start
-
-You need an Apple Silicon Mac running macOS 13.5 or newer, Lima 2.2 or newer, Python 3.10 or newer, and GitHub CLI for verification.
-You do not need to clone the repository or run Git commands to install this tool.
-The default VM uses four CPUs, 8 GiB RAM, and an 80 GiB virtual disk that grows as data is written.
-You also need administrator access to the target GitHub repository to register its runner.
-
-Before creating a VM, check the `Avail` column for your home disk:
-
-```sh
-df -h "$HOME"
+```text
+Configure this Mac for OWNER/REPO with https://github.com/builtbycalvin/github-runner-vm.
 ```
 
-The VM does not reserve all 80 GiB immediately, but it can grow to that size as jobs and Docker data accumulate.
-Plan capacity for that growth plus the downloaded image and space for macOS and your other apps.
-Do not provision on a nearly full disk. Free space or use another Mac first; the installer does not currently enforce a free-space minimum.
+The agent follows [the agent runbook](docs/llm-setup.md). It inspects your Mac and repository, identifies dependencies, and proposes the changes in one plan.
+You approve the plan once. The agent performs the approved steps, checks the results, and reports any remaining work.
+It does not ask you to copy routine commands or decide which packages your workflows need.
 
-If you use Homebrew, install the prerequisites yourself in Terminal.
-Use macOS 14 or newer for Homebrew's supported installation path.
-If `brew` is not found, follow [Homebrew's installation instructions](https://docs.brew.sh/Installation) first, including its printed **Next steps** for PATH.
-Homebrew or Apple's command line tools may require administrator approval.
-Do not give an agent your administrator password.
+To skip routine confirmations, add explicit permission:
 
-```sh
-brew install lima python gh
+```text
+For this setup, proceed without routine confirmations. You may install the
+required host tools and repository dependencies, create one dedicated VM,
+configure its runner service, and run local verification. Do not delete or
+replace existing VMs, change host security or power settings, publish changes,
+or dispatch GitHub workflows without separate permission.
 ```
 
-## 1. Choose new setup or adoption
+This permission applies to this repository and this setup run. It does not disable tool permissions, identity checks, or maintenance safeguards.
+The agent still shows its plan and results. A new target or action outside that scope needs permission.
+If GitHub CLI is already authenticated, runner registration needs no extra human step. Otherwise the agent launches `gh auth login --hostname github.com --web`; browser approval is the only GitHub credential step. Host installation may still show an administrator prompt. Never paste credentials into the conversation.
+If you want the agent to publish a reviewed workflow and run it, explicitly include that repository and those actions in your approval.
 
-### New VM
+**Using an unpublished branch?** Supply its branch URL or reviewed local checkout.
+The default repository URL selects `main`, which cannot install unpushed changes.
 
-Run this in Terminal after installing the prerequisites. No clone or manual download is needed.
-It authorizes creating a **new** VM and adding PATH entries to your Bash and Zsh startup files.
-It does not register a GitHub runner or change workflows.
+## Dependencies follow the repository
 
-```sh
-(
-  set -o pipefail
-  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 \
-    https://raw.githubusercontent.com/builtbycalvin/github-runner-vm/main/bootstrap.sh \
-    | sh -s -- --provision ci --yes-create-vm --configure-shell
-)
+The agent reads workflow steps, referenced scripts, lockfiles, version files, and container definitions.
+It reports the required versions, the source of each requirement, and anything it cannot establish.
+
+Host tools belong on the Mac. Ubuntu packages belong in the VM. Language tools and project dependencies stay reproducible in the target repository's workflows or setup scripts.
+Jobs run without sudo. The toolkit supplies Ubuntu ARM64, rootless Docker, Git, basic utilities, and runner libraries, not every GitHub-hosted toolchain.
+
+A dependency installation is verified through installed-version readback and checks as the CI user.
+A smoke job verifies the runner connection. A representative repository job verifies the actual workload.
+The agent must distinguish those results.
+
+## Dedicated by default, shared when you choose
+
+By default, each repository has its own VM, runner registration, Docker daemon, workspaces, and dependency state.
+The VM persists across jobs. The agent never silently reuses another repository's VM.
+Existing legacy installations remain available without automatic migration.
+
+To reuse a supported repository VM, tell the agent:
+
+```text
+Configure OWNER/SECOND on this Mac using the VM already set up for OWNER/FIRST.
+Check that their dependencies and workloads can share it, then ask once before applying the plan.
 ```
 
-The command downloads and executes this project's installer **on your Mac**.
-It trusts the current code on this repository's `main` branch. Read [bootstrap.sh](bootstrap.sh), [install.sh](install.sh), [ci_vm.py](ci_vm.py), and [config/](config/) first if you want to inspect it.
-The bootstrap downloads a source archive into a temporary directory, calls the same local installer, and removes that temporary copy afterward.
-It never installs prerequisites or chooses a VM operation for you.
+The agent uses `--share-with` after checking compatibility and pausing the existing runners.
+Each repository gets a separate runner registration and workspace, including repositories owned by different personal accounts.
+They share the CI account, packages, Docker daemon, ports, and VM resources. Their jobs may run concurrently.
+Share only mutually trusted repositories whose workflows tolerate those shared resources. Separate directories do not isolate their credentials or files.
+Pause, resume, restart, and package changes affect every repository in that VM. The agent names them before acting and uses `--all-repos` to acknowledge the scope.
+Adding a repository keeps the shared VM paused until its setup and registration are complete.
 
-The installer uses a separate Lima home under `~/.local/share/github-runner-vm/lima`.
-It refuses an existing VM with the same name. It never recreates a VM after a failed or repeated install.
-If provisioning times out, inspect the existing instance before retrying. A timeout is not a rollback.
+New VMs start with 2 CPUs, 2 GiB RAM, and a 20 GiB virtual disk cap.
+These are provisional defaults, not proven minimums for every workload.
+Agents can choose creation sizes through `--cpus`, `--memory`, and `--disk` after inspecting the workflow and host capacity.
+Adoption never resizes a VM. Sparse disks grow with use, and each running VM consumes resources even when its runner is paused.
 
-The installer copies `ci-vm` into `~/.local/bin` and configures PATH for future Bash and Zsh sessions.
-Open a **new terminal window**, then run `ci-vm status`.
-To check from the current terminal without reopening it, use:
+Use trusted code, preferably in private repositories. Do not automatically send public fork jobs to this persistent runner.
+Xcode and other macOS jobs stay on macOS runners.
 
-```sh
-"$HOME/.local/bin/ci-vm" status
+## Maintain it through your agent
+
+```text
+Use github-runner-vm to check the runner for OWNER/REPO on this Mac.
+Explain any needed maintenance and ask once before applying the plan.
 ```
 
-An installer cannot change PATH in the terminal that launched it.
-`--configure-shell` adds one marked block, preserves existing text, and does not duplicate the block on reruns.
-It updates `.bashrc`, the existing Bash login file, and `.zshrc`. Custom `ZDOTDIR` under your home is supported.
-Omit the flag if you manage shell startup files yourself. See [PATH setup and removal](docs/maintenance.md#shell-path-setup).
+You can authorize a named maintenance plan without repeated confirmations.
+The agent uses the selected repository profile, identifies every affected repository, waits for a cooperative pause, performs only the approved maintenance, and verifies before resuming.
+A pending pause or uncertain result stops the operation. There is no force mode, automatic deletion, or blanket approval saved in repository files.
 
-### Existing VM
+## Agent references
 
-Adoption installs the local command and records the existing VM name. It does not provision, start, repair, or reconfigure the VM.
+- [Setup, dependency discovery, approval scope, and verification](docs/llm-setup.md).
+- [VM and runner execution reference](docs/setup.md).
+- [Maintenance and resource planning](docs/maintenance.md).
+- [Security boundaries](docs/security.md).
+- [Agent walkthrough checks](docs/agent-walkthrough.md).
 
-```sh
-(
-  set -o pipefail
-  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 \
-    https://raw.githubusercontent.com/builtbycalvin/github-runner-vm/main/bootstrap.sh \
-    | sh -s -- --adopt ci --configure-shell
-)
-```
-
-If the VM uses a different Lima home or runner user service, specify them explicitly.
-
-```sh
-(
-  set -o pipefail
-  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 \
-    https://raw.githubusercontent.com/builtbycalvin/github-runner-vm/main/bootstrap.sh \
-    | sh -s -- --adopt ci --lima-home "$HOME/.lima" --unit my-runner.service
-)
-```
-
-Provide the actual guest user, UID, and user-service name with `--guest-user`, `--guest-uid`, and `--unit` if they differ from the defaults.
-`status`, `doctor`, and `logs` inspect adopted user services. `doctor` can report an unsupported service contract without changing it.
-`pause`, `resume`, and `restart` require this project's exact maintenance service contract.
-They refuse ordinary `runsvc.sh` services because stopping those services can cancel jobs.
-Read [Adopt without changing existing behavior](docs/maintenance.md#adopt-without-changing-existing-behavior) before proposing a service migration.
-
-## 2. Register and run your first job
-
-For a new VM, continue with [Register and verify a runner](docs/setup.md).
-The VM starts without a registered runner and with its pause gate closed.
-The guide walks through downloading the Linux ARM64 runner, entering a short-lived registration token, enabling the service, and running a manual smoke workflow.
-Success means GitHub reports a successful job on the exact intended runner ID, not merely an online runner.
-
-For adoption, preserve the existing registration and workflows. Start with read-only checks, not registration again.
-
-## Prefer to inspect a local copy?
-
-Cloning remains supported. Review the files, then run the same installer directly:
-
-```sh
-git clone https://github.com/builtbycalvin/github-runner-vm.git
-cd github-runner-vm
-bash install.sh --provision ci --yes-create-vm --configure-shell
-```
-
-Use `--adopt ci` instead of `--provision ci --yes-create-vm` for an existing VM.
-A downloaded and extracted source ZIP also works; Git history is not required.
-For repeatable setup, check out a reviewed commit before installing.
-The bootstrap also accepts `CI_VM_REF` set to a full commit SHA. Pin both the bootstrap URL and the source archive to that same reviewed SHA, as shown in [maintenance](docs/maintenance.md#update-the-local-command).
-
-## Daily use
-
-| Command | Effect |
-| --- | --- |
-| `ci-vm status` | Read VM and runner service state. Never starts a VM. |
-| `ci-vm doctor` | Read prerequisite and isolation checks. Failures need investigation. |
-| `ci-vm logs --lines 100` | Show a bounded local journal tail. Treat logs as sensitive. |
-| `ci-vm pause --timeout 30` | Request a pause after the current listener exits naturally. |
-| `ci-vm resume` | Open the pause gate and start the existing managed service. |
-| `ci-vm restart` | Restart an already paused VM only after conservative idle checks. Leave it paused. |
-
-A pause can remain pending. A listener already waiting for work may accept one final job.
-If no job arrives, the listener can keep waiting. Dispatch the reviewed smoke workflow to let that listener finish, then run `pause` again.
-The command never cancels that job to meet its timeout. A timeout leaves the VM running and the pause request intact.
-`restart` refuses active jobs, active Docker containers, unknown state, and incompatible services.
-There is no force option.
-
-The installed launcher, code, and configuration live under your own home directory.
-See [Maintenance and recovery](docs/maintenance.md) for updates, errors, rollback, and uninstall.
-Agents should start with [docs/llm-setup.md](docs/llm-setup.md).
-
-## Availability and limits
-
-- The Mac, VM, and runner must all be available for jobs to execute. GitHub does not boot a stopped VM.
-- Sleep, loss of power or network, FileVault unlock, and cold boots affect availability.
-- This Linux VM cannot execute Xcode, Simulator, code-signing, or other macOS jobs. Keep those on macOS runners.
-- Rootless Docker and network rules reduce exposure. Passing health checks is not proof against compromise.
-- Jobs can affect later jobs. Do not mix trust levels or attach production secrets.
-- Guest package updates require approved, paused maintenance. Review and apply security updates promptly; they are not installed automatically.
-- Linux ARM64 dependencies differ from GitHub-hosted x64 Ubuntu. Review architecture support before moving a job.
-
-Read [Security boundaries](docs/security.md) before registration.
-No dashboard, alert service, scheduler, fleet manager, or plugin system is included.
-
-## Development and verification
-
-```sh
-python3 -m unittest discover -s tests -v
-bash -n install.sh config/provision.sh
-sh -n bootstrap.sh
-```
-
-Contributors can clone the repository and also run `git diff --check`. That Git check does not apply to a downloaded ZIP.
-Tests use fake Lima and GitHub commands in temporary homes. They do not create a VM or register a runner.
-Use the [live verification checklist](docs/setup.md#verify-the-whole-path) on the intended host before relying on unattended jobs.
-Provisioning, network isolation, service draining, runner updates, VM restart, and Mac cold-boot behavior require separate live verification.
-
-## License
+The installed `ci-vm` command includes its operating references. Agents use the same tested commands for every repository.
+The public toolkit keeps its own CI on GitHub-hosted runners.
 
 Licensed under the [MIT License](LICENSE).

@@ -6,10 +6,10 @@ After=docker.service
 [Service]
 Type=simple
 ExitType=cgroup
-WorkingDirectory=/home/ci/actions-runner
+WorkingDirectory=/home/ci/runners/@KEY@
 ExecCondition=/usr/bin/test ! -e /var/lib/ci-vm/paused
 ExecCondition=/usr/bin/test ! -L /var/lib/ci-vm/paused
-ExecStart=/home/ci/actions-runner/bin/Runner.Listener run --once
+ExecStart=/home/ci/runners/@KEY@/bin/Runner.Listener run --once
 Restart=always
 RestartSec=5
 KillMode=process

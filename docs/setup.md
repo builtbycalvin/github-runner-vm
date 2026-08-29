@@ -1,10 +1,177 @@
-# Register and verify a runner
+# VM and runner execution reference
 
-This guide connects one trusted repository to the VM created by the README setup command.
-Do not register this public project's runner on the VM.
-Use a private target repository whose contributors and workflows you trust.
-Complete the README setup first and open a new terminal so `ci-vm` is on PATH.
-An adopted runner that is already registered does not need this registration procedure again.
+Use this reference to execute the approved agent plan from `docs/llm-setup.md`.
+The agent runs routine commands. The user completes only GitHub's browser approval when host `gh` is not already authenticated.
+An approved plan covers its named steps without repeated confirmations. This reference is also installed with `ci-vm`.
+Use a trusted target repository, not this public toolkit.
+Read [the security boundaries](security.md) before registration.
+
+If your VM already exists, skip creation. Preserve an existing registration and use the adoption section instead.
+
+## Check the prerequisites
+
+Use an Apple Silicon Mac with macOS 13.5 or newer, Lima 2.2 or newer, Python 3.10 or newer, and GitHub CLI for verification.
+You need administrator access to the target repository to register its runner.
+For Homebrew's supported path, use macOS 14 or newer and follow [Homebrew's installation instructions](https://docs.brew.sh/Installation).
+The user completes administrator prompts. If GitHub CLI needs authentication, the agent launches web login and the user approves it in the browser.
+
+```sh
+brew install lima python gh
+df -h "$HOME"
+```
+
+Check the available disk space before creation. Account for image downloads, job data, all other VMs, and space for macOS.
+Do not create a VM on a nearly full disk. The installer does not certify host capacity.
+The default allocation is 2 CPUs, 2 GiB RAM, and a 20 GiB virtual disk limit.
+Increase it for the target's actual jobs. See [resource planning](maintenance.md#resource-planning).
+
+## Create a repository VM
+
+From a reviewed checkout or extracted source archive, run:
+
+```sh
+bash install.sh --repo OWNER/REPO --provision --yes-create-vm --configure-shell
+```
+
+This creates one new VM with a deterministic repository-specific name.
+It records that repository's profile and adds PATH entries to future Bash and Zsh sessions.
+It does not register the runner or change GitHub workflows.
+Use `--cpus`, `--memory`, and `--disk` to select integer creation limits. Memory and disk values are GiB.
+For example, add `--cpus 4 --memory 8 --disk 60` for a reviewed workload that needs those resources.
+
+For a no-clone install, inspect the published source first, then run:
+
+```sh
+(
+  set -o pipefail
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 \
+    https://raw.githubusercontent.com/builtbycalvin/github-runner-vm/main/bootstrap.sh \
+    | sh -s -- --repo OWNER/REPO --provision --yes-create-vm --configure-shell
+)
+```
+
+The pipeline executes this project's installer on your Mac. It trusts the current `main` branch.
+For an unpublished branch, use its reviewed checkout. A bootstrap URL on `main` cannot access unpushed source changes.
+For a fixed revision, pin both the bootstrap URL and `CI_VM_REF` to the same reviewed full SHA as shown in [the update reference](maintenance.md#update-the-local-command).
+Bootstrap removes its temporary source directory. The installed command retains the setup, maintenance, security, and smoke-example files.
+
+A repeated provision request never replaces an existing VM. A timeout keeps the new profile reservation for inspection. After a definite start failure, the installer removes that reservation only when fresh Lima inventory proves that no VM or instance path exists and the profile still exactly matches the bytes it wrote.
+Inspect the saved profile and existing instance before another operation. Use adoption for an approved software update.
+
+Continue in the current terminal with the absolute launcher:
+
+```sh
+"$HOME/.local/bin/ci-vm" profiles
+"$HOME/.local/bin/ci-vm" setup OWNER/REPO
+"$HOME/.local/bin/ci-vm" --repo OWNER/REPO status
+```
+
+Future Bash and Zsh sessions can use `ci-vm` after `--configure-shell` updates PATH.
+`--configure-shell` preserves existing startup-file text and does not duplicate its marked block on reruns.
+Omit it if you manage PATH yourself. See [PATH setup and removal](maintenance.md#shell-path-setup).
+
+## Adopt or inspect an existing VM
+
+Identify its exact Lima home, VM name, guest account, and service before adopting it.
+Adoption installs the local command and records identity. It does not start, repair, resize, or reconfigure the VM.
+For a repository that does not already have a managed profile, use the actual VM name and Lima home:
+
+```sh
+bash install.sh --repo OWNER/REPO --adopt EXISTING_VM --lima-home /absolute/lima-home
+```
+
+A VM already claimed by another profile or the legacy installation cannot be claimed again through adoption.
+Use the explicit sharing procedure for a supported repository profile. It preserves the existing registration and adds a separate one.
+An existing unassigned legacy installation remains selectable with `ci-vm --legacy status`.
+For its setup reference, use `ci-vm --legacy setup OWNER/REPO`. This does not assign that legacy VM to a new profile.
+Do not overwrite its configuration or relabel it implicitly. Resolve legacy migration as a separate reviewed operation.
+If its account or service differs, specify `--guest-user`, `--guest-uid`, and `--unit`.
+Maintenance commands refuse incompatible services. Use [the adoption reference](maintenance.md#adopt-without-changing-existing-behavior).
+
+The older single-VM installation form remains supported for an unmanaged existing VM:
+
+```sh
+(
+  set -o pipefail
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 \
+    https://raw.githubusercontent.com/builtbycalvin/github-runner-vm/main/bootstrap.sh \
+    | sh -s -- --adopt ci --configure-shell
+)
+```
+
+## Share an existing repository VM
+
+Use this path only when the user explicitly requests sharing and every affected repository trusts the others.
+Check workflow dependencies, fixed ports, Docker resource names, cleanup behavior, credentials, and capacity first.
+Shared jobs may run concurrently. The toolkit does not serialize them or isolate one repository from another.
+Use the original repository profile that owns the VM as the sharing anchor, not an added member.
+It must use the supplied service contract. Legacy and custom-service anchors need separate migration review.
+
+Pause the existing repository before attachment. If it already shares its VM, include `--all-repos` and ensure the user's grant covers all members.
+
+```sh
+ci-vm --repo OWNER/FIRST pause
+bash install.sh --repo OTHER_OWNER/SECOND --share-with OWNER/FIRST
+ci-vm setup OTHER_OWNER/SECOND
+```
+
+Attachment requires an already running VM and complete paused-idle proof. It writes a local reservation without creating or resizing a VM.
+Repeating the exact attachment preserves the reservation. Do not delete or repoint it after a timeout or incomplete setup.
+The existing profile and registration remain unchanged. The second repository needs a fresh registration in its own directory.
+
+Set `VM_NAME`, `RUNNER_KEY`, the unit name, and both directories from the setup output.
+Set `LIMA_HOME` to that profile's exact recorded path and export it before any `limactl` command. A VM name alone is not a complete identity.
+Copy only the reviewed helper and service template from this installed toolkit into a new temporary guest directory:
+
+```sh
+export LIMA_HOME
+SHARED_STAGE="$(limactl shell "$VM_NAME" -- mktemp -d /tmp/ci-vm-shared.XXXXXX)"
+limactl cp "$HOME/.local/share/github-runner-vm/config/prepare-shared-runner.sh" \
+  "$HOME/.local/share/github-runner-vm/config/ci-vm-runner@.service" \
+  "$VM_NAME:$SHARED_STAGE/"
+limactl shell "$VM_NAME" -- sudo bash "$SHARED_STAGE/prepare-shared-runner.sh" prepare "$RUNNER_KEY"
+```
+
+The helper holds a guest lock, verifies paused idle state, and keeps a persistent setup gate before writing guest state.
+It prepares the exact member unit and directories without replacing another runner's files. It does not download or register a runner.
+If interrupted, retain the temporary directory and gate. Rerun the same reviewed helper for the same key after inspecting the failure.
+Do not remove locks, overwrite differing units, or clear the gate manually to continue.
+
+As `ci`, download and verify the official ARM64 runner in the member's directory shown by `setup`.
+Then use the second repository's selected profile:
+
+```sh
+ci-vm --repo OTHER_OWNER/SECOND register
+```
+
+Follow the same authenticated registration rules as [the dedicated registration flow](#register-through-authenticated-github-cli).
+Do not use the default `/home/ci/actions-runner` or `/home/ci/work/actions` paths for an added member.
+Never reuse or copy the first repository's registration files. The selected profile obtains its own short-lived credential through authenticated host `gh`.
+
+Successful `register` performs exact GitHub readback, records the runner ID, enables the inactive member unit, finishes the matching setup gate, and removes its staging directory. The VM remains paused.
+
+Inspect the whole shared VM, then resume every member only under the approved scope:
+
+```sh
+ci-vm --repo OTHER_OWNER/SECOND doctor
+ci-vm --repo OTHER_OWNER/SECOND resume --all-repos
+ci-vm --repo OTHER_OWNER/SECOND status
+```
+
+Resume remains a separate authorized action.
+A missing member, extra unit, unfinished setup, or package gate blocks VM-wide mutation.
+Verify a representative job from each repository on its exact runner before calling sharing ready. Keep results distinct from local profile installation.
+
+## Select the repository VM
+
+`ci-vm setup OWNER/REPO` prints the selected VM and its Lima home. It does not execute commands or verify registration.
+Every command below must use that same identity.
+For an unassigned legacy installation, use `ci-vm --legacy setup OWNER/REPO` and replace every `ci-vm --repo OWNER/REPO` command below with `ci-vm --legacy`.
+Keep that selector throughout setup and maintenance. A missing repository profile is not permission to create or migrate a VM.
+Set `VM_NAME` to the exact VM name shown by `ci-vm profiles`.
+Use the recorded Lima home if it differs from the default below.
+The guest account and service commands assume the supplied `ci` UID 1001 contract.
+For a custom adopted account or service, stop and use [the adoption reference](maintenance.md#adopt-without-changing-existing-behavior).
 
 ## Check the VM
 
@@ -13,19 +180,18 @@ If you adopted a VM, use its recorded Lima home instead.
 
 ```sh
 export LIMA_HOME="$HOME/.local/share/github-runner-vm/lima"
-limactl list ci
-ci-vm status
+VM_NAME=REPLACE_WITH_VM_NAME
+limactl list "$VM_NAME"
+ci-vm --repo OWNER/REPO status
 ```
 
-The VM should be running. The runner is not yet registered or enabled.
+The VM should be running. A newly provisioned runner is not yet registered or enabled. An adopted VM can already have a registration.
 The administrator account is `limaadmin`. Jobs must run as `ci`, UID 1001.
-Open a guest terminal and switch to the CI account before downloading or running the runner.
+The agent runs bounded guest checks as the CI account before downloading or running the runner:
 
 ```sh
-limactl shell ci
-sudo -iu ci
-id
-docker info --format '{{json .SecurityOptions}}'
+limactl shell --tty=false "$VM_NAME" -- sudo -iu ci sh -c \
+  'id && docker info --format '\''{{json .SecurityOptions}}'\'''
 ```
 
 Expect UID 1001, only the `ci` group, and `rootless` in Docker's security options.
@@ -35,73 +201,60 @@ Package updates are not automatic. Follow [guest maintenance](maintenance.md#upd
 
 ## Download the Linux ARM64 runner
 
-In the target repository on GitHub, open **Settings**, **Actions**, **Runners**, then **New self-hosted runner**.
-Choose **Linux** and **ARM64**.
-Repository administrator access is required. [GitHub registration instructions](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners).
+The agent resolves the current official Linux ARM64 runner release and checksum from GitHub. It downloads the archive as `ci` into the empty runner directory shown by `setup`, verifies SHA-256, and extracts it there.
+Repository administrator access is required for registration. See [GitHub's registration instructions](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners).
 
-In the guest `ci` terminal, use the existing empty directory.
-
-```sh
-cd /home/ci/actions-runner
-```
-
-Run the **Download** commands shown by GitHub in that directory.
-Verify the archive using the SHA-256 value shown by GitHub before extracting it.
 Do not use x64, macOS, or an unverified archive.
 Record the selected runner version in your private operations notes.
-The current version comes from GitHub, not a copied token or stale version in this guide.
+The current version comes from GitHub, not a stale version in this guide.
 
 If registration files already exist, stop. Do not overwrite them or use `--replace`.
 Keep `.runner*`, `.credentials*`, `.env`, `.path`, and `_diag/` inside the guest.
 
-## Register with a short-lived token
+## Register through authenticated GitHub CLI
 
-Copy the short-lived registration token from GitHub's setup page.
-Do not copy a personal access token, SSH private key, browser profile, or Mac `gh` configuration into the VM.
-Registration tokens expire after one hour. [GitHub runner token API](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository).
-
-In the guest `ci` terminal, replace `OWNER/REPOSITORY` with the intended repository.
-Run this without `--token` so the runner prompts for the token instead of recording it in shell history.
-Paste the token into that prompt yourself. Do not put it in an agent message or saved transcript.
+Run the selected profile's registration command. It checks the paused VM, obtains a one-hour token through authenticated host `gh`, sends it only through Lima stdin, configures the exact runner unattended, reconciles local and GitHub identity, records `runner_id`, and enables the selected service without starting it. [GitHub runner token API](https://docs.github.com/en/rest/actions/self-hosted-runners#create-a-registration-token-for-a-repository).
 
 ```sh
-./config.sh --url https://github.com/OWNER/REPOSITORY \
-  --name spare-mac-arm64 --labels spare-mac --work /home/ci/work/actions
+ci-vm --repo OWNER/REPOSITORY register
 ```
+
+If authentication is missing, the agent runs `gh auth login --hostname github.com --web`. The user approves access in the browser, then the agent retries. Do not copy a token from GitHub's setup page.
 
 Use the default runner group. Keep the default `self-hosted`, `Linux`, and `ARM64` labels.
 Do not use `--ephemeral`. This is a persistent registration whose listener exits after each job.
 It does not provide a clean VM for each job.
 
-Do not run `svc.sh install`, `runsvc.sh`, or a second listener.
+Do not run `svc.sh install`, `runsvc.sh`, or an untracked listener.
+In a shared VM, each repository uses only its own managed service and registration directory.
 The provided user service launches `Runner.Listener run --once` and uses a pause gate between listeners.
-Exit the `ci` terminal and then the guest terminal to return to the Mac.
+The command returns only after exact GitHub readback and inactive service enablement succeed. It never starts the listener; `resume` remains explicit.
+
+### Legacy manual fallback
+
+For an unassigned legacy profile, use `ci-vm --legacy register --manual-token OWNER/REPOSITORY` from your own terminal. This fallback is not part of managed repository onboarding. Its deadline leaves guest registration state unconfirmed and the VM paused.
+
+## Verify, then resume the provided service
+
+`register` already enabled the exact selected unit without starting it and confirmed the GitHub runner remained offline and idle. For a shared member, it also completed only the matching registration gate. The VM remains paused.
+
+For a dedicated VM:
 
 ```sh
-exit
-exit
+ci-vm --repo OWNER/REPO doctor
+ci-vm --repo OWNER/REPO resume
+ci-vm --repo OWNER/REPO status
 ```
 
-## Enable the provided service
-
-This changes only the new VM's CI user service. It must not be applied to an existing runner without a reviewed migration.
-The unit already exists at `/etc/systemd/user/ci-vm-runner.service` in a newly provisioned VM.
+For a shared VM:
 
 ```sh
-limactl shell ci sudo runuser -u ci -- env \
-  XDG_RUNTIME_DIR=/run/user/1001 \
-  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus \
-  systemctl --user daemon-reload
-limactl shell ci sudo runuser -u ci -- env \
-  XDG_RUNTIME_DIR=/run/user/1001 \
-  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus \
-  systemctl --user enable ci-vm-runner.service
-ci-vm resume
-ci-vm status
-ci-vm doctor
+ci-vm --repo OWNER/REPO doctor
+ci-vm --repo OWNER/REPO resume --all-repos
+ci-vm --repo OWNER/REPO status
 ```
 
-Check GitHub's runner page. Expect `spare-mac-arm64` to become online.
+Check GitHub's runner page. Expect the deterministic runner name reported by `register` to become online.
 An online runner is not yet proof that the workflow uses it.
 
 ## Install job dependencies
@@ -123,10 +276,10 @@ Treat data cleanup as target-project logic with exact ownership labels. Do not u
 
 ## Dispatch a smoke workflow
 
-Open and review [examples/smoke.yml](../examples/smoke.yml). Copy its contents to `.github/workflows/runner-smoke.yml` in the **target** repository.
-You can use GitHub's file editor; a local copy of this toolkit is not required.
+The agent prepares an exact target-repository diff that adds [examples/smoke.yml](../examples/smoke.yml) as `.github/workflows/runner-smoke.yml`.
+Publish it only after separate authorization.
 Keep the example outside this public project's active workflows.
-If you chose another runner name or label, update both `EXPECTED_RUNNER` and `runs-on` in the example.
+If you use different labels, update `runs-on` in the example.
 All labels in `runs-on` must match the registered runner.
 
 The example has only `workflow_dispatch`, read-only permissions, and no checkout or deployment step.
@@ -137,10 +290,9 @@ Review and publish that workflow through the target repository's normal process.
 Do not add `pull_request_target`, check out fork code, or enable automatic public fork execution.
 The workflow file must be on the default branch before manual dispatch is available.
 
-On the Mac, authenticate GitHub CLI if needed. Authentication stays on the Mac.
+If host `gh` needs authentication, the agent launches web login and the user approves it in the browser. Authentication stays on the Mac.
 
 ```sh
-gh auth login --hostname github.com
 gh workflow run runner-smoke.yml --repo OWNER/REPOSITORY --ref main
 gh run list --repo OWNER/REPOSITORY --workflow runner-smoke.yml --event workflow_dispatch --limit 5
 ```
@@ -150,8 +302,17 @@ Select the run you just dispatched by its branch, time, and commit. Do not assum
 
 ## Verify the whole path
 
-Replace `RUN_ID` and `RUNNER_ID` with IDs returned by GitHub.
-The runner-list query is read-only. It can require repository administration permission.
+Use the runner ID that `register` persisted. Verify the exact run through the selected profile:
+
+```sh
+ci-vm --repo OWNER/REPOSITORY verify-run RUN_ID \
+  --expect-sha FULL_SHA \
+  --expect-event workflow_dispatch \
+  --expect-runner-id RUNNER_ID \
+  --job smoke
+```
+
+The command requires the selected profile to contain the persisted runner ID and compares it with `--expect-runner-id` before it calls GitHub. It verifies the event, commit, job result, runner ID, runner name, and labels. Name every job allowed to run on that runner with `--job`; an unnamed job on the selected runner makes verification fail. The API queries below are read-only diagnostics and can require repository administration permission.
 
 ```sh
 gh api --paginate repos/OWNER/REPOSITORY/actions/runners \
@@ -169,10 +330,43 @@ Require all of the following before declaring success.
 - Every smoke job succeeded on the intended `runner_id` and `runner_name`.
 - The job labels include `self-hosted`, `Linux`, `ARM64`, and `spare-mac`.
 - The workflow's guest identity and Docker checks passed.
-- `ci-vm status` and `ci-vm doctor` report the current VM state without unresolved errors.
+- `ci-vm --repo OWNER/REPO status` and `ci-vm --repo OWNER/REPO doctor` report the current VM state without unresolved errors.
 
-Then run the target project's real checks on a reviewed branch.
+## Move a real job
+
+An online runner does not automatically replace `ubuntu-latest` in your workflows.
+GitHub routes a job only when all of its `runs-on` labels match a runner.
+[GitHub runner selection](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow).
+
+Choose one trusted Linux job in the target repository.
+Record its current `runs-on` value so you can restore it.
+After checking that its actions, tools, and container images support Linux ARM64, change that job's runner selection:
+
+```yaml
+runs-on: [self-hosted, Linux, ARM64, spare-mac]
+```
+
+Keep all other workflow behavior unless a dependency needs a reviewed ARM64 change.
+Preserve events, branch and path filters, permissions, `needs`, job names, concurrency, cancellation, artifacts, and cleanup.
+If the workflow uses a runner matrix or reusable workflows, review those callers too. Do not replace the matrix blindly.
+Keep Xcode and other macOS jobs on macOS runners.
+Do not route untrusted public fork jobs to this persistent VM.
+
+Publish the reviewed change through the target repository's normal process.
+Run the target project's real checks on a reviewed branch.
 A smoke job does not prove that its database cleanup, cancellation behavior, artifacts, or architecture-specific dependencies work.
+In GitHub's **Actions** tab, open that run and check its job logs and conclusion.
+Use the job API commands above to confirm the exact runner ID, not just a matching name.
+
+Your normal GitHub workflow triggers now send that job to the VM.
+The workflow's checkout step downloads the source into the guest. No Mac folder sharing or manual source sync is required.
+When a job stays queued, check `ci-vm --repo OWNER/REPO status`, the GitHub runner page, and all `runs-on` labels.
+GitHub does not start a stopped VM or wake a sleeping Mac.
+
+To roll back job routing, restore the recorded `runs-on` value through the same review process.
+Let active jobs finish. Do not delete the VM or stop the listener to undo a workflow change.
+
+## Check unattended operation separately
 
 Before depending on unattended operation, separately approve and test cooperative pause, resume, guest restart, package updates, and a Mac cold boot.
 Test a listener crash with a surviving child to verify that `ExitType=cgroup` prevents a second listener.

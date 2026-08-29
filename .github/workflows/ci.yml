@@ -26,10 +26,10 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Check shell syntax
         run: |
-          bash -n install.sh config/provision.sh
+          bash -n install.sh config/provision.sh config/prepare-shared-runner.sh
           sh -n bootstrap.sh
       - name: Check whitespace
-        run: git diff --check
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Validate Lima configuration without creating a VM
         if: runner.os == 'Linux'
         env:

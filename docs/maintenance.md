@@ -1,13 +1,136 @@
 # Maintain and recover the runner
 
-Use `ci-vm status` before maintenance.
+Use `ci-vm profiles` to find the repository, then `ci-vm --repo OWNER/REPO status` before maintenance.
 Use the exact Lima home and VM named in the local configuration.
-The commands do not manage other VMs, Docker resources, or repositories.
+Repository inspection, logs, and run verification use the selected profile. VM maintenance covers every repository sharing its VM.
+With multiple configurations, an unqualified command refuses to choose.
+Use `--legacy` to select an older single-VM installation explicitly.
+Profiles have dedicated VMs by default. Explicit shared profiles use the same VM, CI account, packages, and Docker daemon.
+
+## Maintain a shared VM
+
+Inspect `ci-vm profiles` and the selected repository's `status` before proposing a change.
+Shared pause, resume, restart, and package application require `--all-repos`. The command lists every affected repository.
+Shared resume requires the complete group to be paused and idle, even on a repeated request. Pause and wait for every runner to drain before resuming; an already active member is not treated as successful idempotent resume.
+Authorization must cover those repositories. A flag does not extend a grant for one repository to its siblings.
+
+```sh
+ci-vm --repo OWNER/REPO pause --all-repos
+ci-vm --repo OWNER/REPO packages ripgrep --apply --yes --all-repos --json
+ci-vm --repo OWNER/REPO restart --all-repos
+ci-vm --repo OWNER/REPO resume --all-repos
+```
+
+Execute only the approved steps. Package installation does not imply approval for restart or resume.
+Each listener can accept one final job while pause is pending. Complete idleness requires every member service and cgroup to be empty, plus no remaining runner processes, containers, or service jobs.
+The CLI compares host membership with persistent guest unit files and runtime units. Missing or extra members refuse maintenance even if the selected runner looks idle.
+A synchronous partial resume failure restores the pause marker. Already-started listeners drain naturally. A submitted start request is not proof of an online runner.
+
+Adding a repository holds a shared-setup gate until its automatic registration transaction completes.
+Do not clear that gate or delete a profile to let another member resume. Finish the exact reserved member with [the shared setup procedure](setup.md#share-an-existing-repository-vm), or prepare a separately approved recovery plan.
+All repositories share dependency changes and downtime. Keep the CLI upgraded for every operator of that VM. Old binaries and raw administrator commands do not enforce the new group checks.
+
+## Let the agent handle maintenance
+
+The agent inspects the selected runner, proposes one bounded maintenance plan, and performs its approved steps.
+An explicit user grant can skip routine confirmations within that scope. It cannot bypass identity checks, pause gates, runtime permissions, or uncertain state.
+The agent runs routine commands and verifies their results. If host `gh` needs authentication, the agent launches `gh auth login --hostname github.com --web` and the user approves it in the browser.
+See [the agent runbook](llm-setup.md) for dependency discovery and approval rules.
+
+## Install repository system packages
+
+Use the package command for a reviewed list of Ubuntu dependencies. Keep language tools and project dependencies in the target repository's workflow or setup script.
+The preview is read-only. It uses existing package indexes and shows installed versions and the proposed transaction, including transitive changes.
+
+```sh
+ci-vm --repo OWNER/REPO packages ripgrep libpq-dev --json
+```
+
+After the exact request is approved, pause the runner and wait for complete idle evidence before applying it:
+
+```sh
+ci-vm --repo OWNER/REPO pause
+ci-vm --repo OWNER/REPO packages ripgrep libpq-dev --apply --yes --json
+```
+
+An agent uses `--yes` after conversational approval or within an explicit unattended grant. Without it, apply needs an interactive confirmation and refuses a noninteractive caller.
+`--yes` skips only the package confirmation. It does not pause the runner, force an idle check, or authorize another target.
+For an exact available version, use `PACKAGE=VERSION`. Do not pass URLs, paths, shell commands, package-source definitions, or apt options.
+
+The helper installs from the guest's configured package repositories. Review those sources and their signing configuration before applying changes.
+It does not certify source provenance or make package maintainer scripts safe. Those scripts execute as guest root and can change services.
+The helper refuses removals, unsupported transactions, and changes to the protected base Docker packages.
+It does not add repositories, refresh indexes, upgrade the whole system, clear package-manager locks, or resume the runner.
+For stale indexes or unavailable versions, inspect the cause and obtain any needed approval before an index refresh, then preview again.
+
+The helper rechecks its simulated transaction and paused state before applying changes.
+A changed transaction requires a new preview and authorization if it exceeds the approved request.
+It reads back installed versions, service-contract checks, idle state, and whether a reboot is required.
+Inspect the result and verify the tools as the CI user before resuming. A package receipt is not proof that the repository's tests pass.
+
+Before submitting APT, the helper creates the root-owned `/var/lib/ci-vm/package-maintenance` directory.
+The updated CLI refuses resume, restart, and another apply while that gate remains.
+Successful version, contract, and paused-idle checks allow the helper to remove its empty gate. Failure or timeout leaves it in place.
+Use the same updated CLI for all maintenance; old versions and raw administrator commands do not enforce this gate.
+
+On failure or timeout, keep the runner paused and inspect the current guest operation before retrying.
+The package manager may still be running after a host timeout. Do not start another transaction or claim rollback.
+For recovery, the agent must establish that no package operation or package-manager lock remains, inspect `dpkg --audit`, and compare installed versions with the approved transaction.
+It must verify the service contract and paused idle state again. Package repair, if needed, requires a reviewed recovery plan.
+Only after that evidence and authorization may the agent remove the exact empty package-maintenance directory using `rmdir` as the guest administrator.
+Do not recursively delete the gate, force an operation past it, or clear it merely because a timeout expired.
+If a reboot is required, use a separately authorized paused restart and repeat verification before resume.
+
+## Verify a GitHub run
+
+Use the run ID returned by the approved dispatch, the expected commit and event, the independently identified runner ID, and exact job names.
+Do not substitute the latest run or infer the expected runner from the run being checked.
+
+```sh
+ci-vm --repo OWNER/REPO verify-run RUN_ID \
+  --expect-sha FULL_COMMIT_SHA --expect-event workflow_dispatch \
+  --expect-runner-id RUNNER_ID --job smoke --json
+```
+
+Repeat `--job` for every required job on this VM. Use the exact expanded names for matrix jobs.
+Other jobs may run on GitHub-hosted or macOS runners.
+The command requires the selected profile's persisted runner ID to match `--expect-runner-id` before it calls GitHub. It reads the selected attempt's paginated jobs and verifies repository, commit, event, completion, successful conclusions, and the selected jobs' runner identity and labels. The repeated `--job` values are the full allowlist for that runner in this run.
+It does not dispatch, access guest identity files, or alter GitHub state.
+A pending, skipped, missing, mismatched, or unsuccessful required job is not verified success.
+A successful smoke job proves runner connectivity; repeat verification for a representative repository job before claiming workload readiness.
+
+## Resource planning
+
+New repository VMs default to 2 CPUs, 2 GiB RAM, and a 20 GiB virtual disk cap.
+This is a starting allocation, not a measured minimum or a guarantee that provisioning and your jobs will fit.
+Use the actual workflow to choose capacity. Compilation, browsers, databases, and several container images can exceed these defaults.
+
+Creation accepts bounded integers through `--cpus` (1 to 64), `--memory` (1 to 512 GiB), and `--disk` (8 to 4096 GiB).
+The parser's lower bounds are not recommended workload minimums.
+For example, after reviewing the target workload and host capacity:
+
+```sh
+bash install.sh --repo OWNER/REPO --provision --yes-create-vm --cpus 4 --memory 8 --disk 60
+```
+
+Disk is a sparse virtual capacity limit, not the amount of host storage consumed immediately.
+Images, dependencies, caches, and workspaces grow over time. Check both guest usage and host free space.
+Allow for the sum of running VM memory allocations and enough headroom for macOS.
+An idle VM still uses resources. Pausing the runner stops future listener admission; it does not shut down the VM or release its memory allocation.
+There is no automatic VM suspension, cache pruning, or resource scheduler.
+
+A profile stores requested creation sizes, not current live utilization.
+Adoption and command updates do not resize existing VMs. Resource flags are refused with adoption.
+Automatic VM names are bounded against Lima's longest temporary SSH socket path on macOS. Explicit VM names are checked before a profile or VM is created; use a shorter `--provision` name or `--lima-home` if the preflight refuses.
+Do not edit profile JSON to resize a disk or change the target VM.
+A later resize needs a separate reviewed Lima operation with a paused runner, idle evidence, and a recovery plan.
+Do not shrink a disk or delete caches to force a workload into the defaults.
+Measure an approved representative job before claiming that a smaller allocation is sufficient.
 
 ## Pause without cancelling work
 
 ```sh
-ci-vm pause --timeout 30
+ci-vm --repo OWNER/REPO pause --timeout 30
 ```
 
 Pause creates `/var/lib/ci-vm/paused` in the guest.
@@ -19,16 +142,16 @@ If a listener is already waiting, it may accept one last job.
 If it receives no job, pause can remain pending indefinitely.
 Exit code 4 means that the bounded wait expired, not that the listener was killed.
 The pause request stays in place, and no delayed restart is scheduled.
-Dispatch the reviewed smoke workflow to let the listener finish, then repeat `pause`.
-Do not dispatch unreviewed work just to drain a listener.
+If the user separately authorized that dispatch, run the reviewed smoke workflow to let the listener finish, then repeat `pause`.
+Otherwise keep the pause pending and report it. A reviewed workflow alone is not dispatch permission.
 
 After pause succeeds, review any remaining containers or background work before VM maintenance.
 Only the project that owns a resource may decide how to remove it.
 
 ```sh
-ci-vm restart --timeout 120
-ci-vm doctor
-ci-vm resume
+ci-vm --repo OWNER/REPO restart --timeout 120
+ci-vm --repo OWNER/REPO doctor
+ci-vm --repo OWNER/REPO resume
 ```
 
 `restart` requires an already paused and idle runner.
@@ -44,8 +167,8 @@ The host command lock serializes cooperating commands in one installation, not e
 ## Read logs and diagnose errors
 
 ```sh
-ci-vm logs --lines 100
-ci-vm doctor --timeout 30
+ci-vm --repo OWNER/REPO logs --lines 100
+ci-vm --repo OWNER/REPO doctor --timeout 30
 ```
 
 Logs remain local terminal output. They can contain repository details, URLs, and job output.
@@ -81,7 +204,7 @@ For Zsh, it uses the installer environment's `ZDOTDIR` if set, otherwise your ho
 Only paths inside your home are supported. Symlinks, unsafe permissions, and edited managed blocks are refused without replacement.
 
 Open a new terminal after setup. A subprocess cannot change its parent shell's PATH.
-For immediate use, run `"$HOME/.local/bin/ci-vm" status`, or run this once in your current terminal:
+For immediate use, run `"$HOME/.local/bin/ci-vm" --repo OWNER/REPO status`, or run this once in your current terminal:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -98,17 +221,40 @@ Keep the block if other installed tools rely on that bin directory. Never delete
 
 Download and review a newer commit or release before installing it. Cloning is optional.
 Keep the previous source folder until the update passes tests.
-Rerun `install.sh --adopt` with the **same** VM, Lima home, user, UID, unit, and optional GitHub identity settings.
+For a dedicated or original anchor profile, rerun `install.sh --adopt` with the **same** VM, Lima home, user, UID, unit, and optional GitHub identity settings.
 The installer preserves configuration and refuses conflicting values or unrelated files.
 It does not change an installed VM template or service.
 
-For a VM created with this project's default setup, the update command is:
+For a dedicated or anchor repository profile, use the VM name and Lima home shown by `ci-vm profiles`:
+
+```sh
+bash install.sh --repo OWNER/REPO --adopt VM_NAME --lima-home /absolute/recorded/lima-home
+ci-vm --repo OWNER/REPO status
+```
+
+Omit resource flags. The existing profile's creation metadata stays unchanged.
+For an added shared member, repeat its exact attachment command with the original anchor shown by `ci-vm profiles`:
+
+```sh
+bash install.sh --repo OTHER_OWNER/SECOND --share-with OWNER/FIRST
+ci-vm --repo OTHER_OWNER/SECOND status
+```
+
+An exact rerun updates installed command files without recreating the member or changing its registration.
+Do not replace `--share-with` with adoption, another anchor, or a sibling member. Do not rerun guest preparation just to update the host command.
+Version 2 dedicated/anchor profiles and version 3 shared members live in `~/.config/github-runner-vm/profiles/`.
+The older version 1 `config.json` remains separate. No hidden active-profile file is used.
+Never hand-edit these formats to claim a VM or remove its membership checks.
+
+For an older unassigned VM named `ci` created with this project's dedicated Lima home, use:
 
 ```sh
 bash install.sh --adopt ci --lima-home "$HOME/.local/share/github-runner-vm/lima"
-ci-vm status
+ci-vm --legacy status
 ```
 
+The following bootstrap example updates that legacy configuration. For a dedicated profile, add `--repo OWNER/REPO` and use its exact recorded VM and Lima home.
+For a shared member, replace the adoption arguments with its exact `--repo` and `--share-with` arguments above.
 You can also update without keeping a source folder. Set `revision` to the full 40-character commit SHA you reviewed, then download the bootstrap from that same revision:
 
 ```sh
@@ -195,8 +341,22 @@ Test a cold boot independently from a guest restart.
 
 First decide whether you are removing the local command or retiring the runner.
 Removing the command does not stop the VM or unregister the runner.
+The launcher and installed source are shared by all profiles. Keep them if any remaining repository needs the command.
+Removing a single profile is a separately reviewed local file deletion, not a runner retirement or disk cleanup.
+Record the exact repository, VM, and Lima home privately before removing only that profile's JSON file.
+For a shared member, first complete a separately reviewed retirement of its registration and inactive guest unit.
+Deleting only its host profile leaves a guest member that maintenance correctly reports as unexpected.
+Do not remove an anchor while other profiles reference it. The CLI does not automatically promote a new anchor or remove members.
 
-After confirming the exact files belong to this installation, remove only `~/.local/bin/ci-vm`, the installed `ci_vm.py`, and its installed `config/` directory under `~/.local/share/github-runner-vm`.
+After confirming the exact files belong to this installation, remove only `~/.local/bin/ci-vm` and these installed files under `~/.local/share/github-runner-vm`:
+
+- `ci_vm.py` and `ci_vm_checks.py`
+- `config/lima.yaml`, `config/provision.sh`, and `config/ci-vm-runner.service`
+- `config/ci-vm-runner@.service` and `config/prepare-shared-runner.sh`
+- `docs/setup.md`, `docs/llm-setup.md`, `docs/maintenance.md`, and `docs/security.md`
+- `examples/smoke.yml`
+
+Leave other files in those directories untouched.
 Remove `~/.config/github-runner-vm/config.json` only after recording its VM identity privately.
 Do not remove the whole share directory. The default VM disks live in its `lima/` child directory.
 Leave shared shell PATH entries in place if other tools use `~/.local/bin`.

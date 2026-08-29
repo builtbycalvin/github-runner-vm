@@ -16,7 +16,7 @@ apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
     ca-certificates curl gnupg uidmap dbus-user-session slirp4netns \
     fuse-overlayfs nftables apparmor apparmor-utils jq git unzip \
-    libicu74 libssl3t64 zlib1g libkrb5-3 unattended-upgrades
+    libicu74 libssl3t64 liblttng-ust1t64 zlib1g libkrb5-3 unattended-upgrades
 
 if ! id ci >/dev/null 2>&1; then
     if getent passwd 1001; then

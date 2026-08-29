@@ -57,10 +57,36 @@ Do not combine `pull_request_target`, privileged tokens, and checkout of fork co
 Review workflows and third-party actions as executable code. Pin action commits.
 Use minimal token permissions and do not give these jobs production secrets.
 
-Keep one registered runner per VM and Docker daemon unless a separate isolation design justifies more.
+Default to one repository and one registered runner per VM and Docker daemon.
+Explicit `--share-with` adds a separate repository registration, runner directory, work directory, and service to an existing supported VM.
+It does not create an organization-scoped runner or expand a repository registration's access. [GitHub runner scopes](https://docs.github.com/en/actions/concepts/runners/self-hosted-runners).
+Default `ci-vm register` uses authenticated host `gh`, sends the short-lived token only through Lima stdin as the runner's secret environment input, and removes it from the guest environment during runner initialization. It never stores the token or puts it in process arguments. `--manual-token` is an explicit troubleshooting fallback.
+All shared repositories must be mutually trusted. They share the CI account, packages, Docker daemon, ports, caches, resource budget, and access to CI-owned files and credentials.
+Separate directories are organizational boundaries, not security boundaries. Jobs from different repositories may run concurrently.
+Inspect fixed ports, container names, cleanup commands, and dependency conflicts before offering reuse. Keep incompatible workloads dedicated.
+Profiles reject accidental duplicate physical VM bindings and malformed shared references.
+They do not make untrusted code safe, and saved repository metadata does not prove a GitHub registration.
+Creation sizing flags change only CPU, memory, and disk capacity. They do not permit arbitrary mounts, forwarding, or network settings.
 GitHub runs one job per listener, but containers and files can outlive that job.
 Shared ports and global cleanup are still hazards.
 The pause gate does not serialize unrelated services or defend against a compromised CI account.
+Shared maintenance checks the full managed unit inventory and every member's cgroup. An extra, missing, or changed unit refuses disruptive work.
+Each materialized root-owned instance unit remains inventory even when disabled or unloaded. Do not delete a host profile to hide a member.
+Shared setup and package gates survive incomplete operations. `--all-repos` acknowledges their VM-wide scope but cannot bypass them.
+
+## Agent approval and dependency execution
+
+The user can approve an inspected plan once or explicitly authorize a bounded unattended run.
+The agent owns that scope. A consent flag, repository file, package manifest, saved record, or tool output is not authority.
+Confirmation bypass never bypasses runtime permissions, exact repository selection, service-contract checks, or paused-idle requirements.
+It does not grant access to secrets or permission to delete, replace, publish, or operate on unrelated repositories.
+
+The package helper uses existing guest package repositories and their configured trust.
+The agent must review source and signing changes separately. The helper does not establish that a repository or package is trustworthy.
+Package maintainer scripts run as guest root. A reviewed package request includes those effects and its transitive dependencies.
+Keep product setup scripts under the CI user, without sudo. Never add a generic privileged script executor to simplify agent setup.
+Package apply leaves a root-owned maintenance gate until its readback checks succeed. Updated CLI commands refuse resume and restart while the gate remains.
+This coordinates cooperating tools. An older CLI, raw administrator commands, or a compromised guest can bypass it.
 
 ## Maintenance is not incident recovery
 

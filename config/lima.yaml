@@ -2,9 +2,9 @@ minimumLimaVersion: 2.2.0
 vmType: vz
 os: Linux
 arch: aarch64
-cpus: 4
-memory: 8GiB
-disk: 80GiB
+cpus: 2
+memory: 2GiB
+disk: 20GiB
 images:
   - location: https://cloud-images.ubuntu.com/releases/noble/release-20260705/ubuntu-24.04-server-cloudimg-arm64.img
     arch: aarch64

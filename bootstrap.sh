@@ -3,7 +3,7 @@
 bootstrap() {
     set -eu
     if [ "$#" -eq 0 ]; then
-        echo 'Pass --adopt NAME or --provision NAME --yes-create-vm. Add --configure-shell for PATH setup.' >&2
+        echo 'Pass --repo OWNER/REPO --provision --yes-create-vm, or --adopt NAME. Add --configure-shell for PATH setup.' >&2
         return 2
     fi
     for tool in curl tar bash python3 limactl; do

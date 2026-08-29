@@ -13,11 +13,8 @@ jobs:
     steps:
       - name: Verify guest identity and Docker
         shell: bash
-        env:
-          EXPECTED_RUNNER: spare-mac-arm64
         run: |
           set -euo pipefail
-          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
           test "$RUNNER_OS:$RUNNER_ARCH" = Linux:ARM64
           test "$(uname -m)" = aarch64
           test "$(id -u):$(id -un):$(id -Gn)" = 1001:ci:ci
