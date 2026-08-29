@@ -9,7 +9,7 @@ An adopted service is observational unless it matches the maintenance contract.
 Select the repository explicitly when multiple profiles exist. Never guess or repoint another profile.
 Use `--share-with` only when the user chose sharing. Each repository still needs its own registration, runner directory, workspace, and service.
 Inspect shared dependencies, ports, Docker resources, and workflow cleanup before proposing sharing. Honor a target repository's rule against sharing.
-Shared VM mutations need authorization covering every affected repository and `--all-repos`. These flags acknowledge intent and scope, not permission or isolation.
+Shared VM mutations, including registration, need authorization covering every affected repository and `--all-repos`. These flags acknowledge intent and scope, not permission or isolation.
 Check every member's service and cgroup before VM-wide maintenance. Preserve pending setup and package gates until verified recovery.
 Preserve legacy configuration without implicit migration. Profile repository metadata is not proof of registration.
 Resource flags apply only at creation. Keep toolchain dependencies in the target repository's workflows.
@@ -48,7 +48,7 @@ This repository's `.github/workflows/` must use GitHub-hosted runners. The self-
 Use `.agents/skills/verify-github-runner-vm/SKILL.md` for reproducible installed-CLI terminal evidence and its maintained feature map. Its default temporary-home proof does not touch live VMs or GitHub.
 
 Run `python3 -m unittest discover -s tests -v` and `git diff --check`.
-Run `bash -n` separately on `install.sh`, `config/provision.sh`, and `config/prepare-shared-runner.sh`.
+Run `bash -n` separately on `install.sh`, `config/provision.sh`, `config/prepare-shared-runner.sh`, and `config/container-runtime-state.sh`.
 Run `sh -n bootstrap.sh` and test downloads with fake curl in a temporary home. Do not execute the published bootstrap during local tests.
 Use temporary homes and fake executables for maintenance tests. Never run them against a live VM without approval.
 Inspect CLI help and run Bash and Zsh PATH tests. Report missing shells as missing coverage.

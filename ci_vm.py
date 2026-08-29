@@ -29,7 +29,7 @@ UNIT = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,150}\.service\Z')
 INSTALL_FILES = (
     'ci_vm_checks.py',
     'config/lima.yaml', 'config/provision.sh', 'config/ci-vm-runner.service',
-    'config/ci-vm-runner@.service', 'config/prepare-shared-runner.sh',
+    'config/ci-vm-runner@.service', 'config/prepare-shared-runner.sh', 'config/container-runtime-state.sh',
     'docs/setup.md', 'docs/maintenance.md', 'docs/security.md', 'docs/llm-setup.md', 'examples/smoke.yml',
 )
 RESOURCE_LIMITS = {'cpus': (1, 64), 'memory_gib': (1, 512), 'disk_gib': (8, 4096)}
@@ -85,6 +85,22 @@ class Selection(Mapping):
 
     def __len__(self):
         return len(self.selected)
+
+
+@dataclass(frozen=True)
+class HostArchitecture:
+    system: str
+    process_machine: str
+    hardware_machine: str
+    translated: bool
+
+    @property
+    def supported(self):
+        return self.system == 'Darwin' and self.hardware_machine == 'arm64' and (self.process_machine == 'arm64' or self.translated)
+
+    def display(self):
+        suffix = ' under Rosetta' if self.translated else ''
+        return f'{self.system} {self.hardware_machine} (process {self.process_machine}{suffix})'
 
 
 @dataclass(frozen=True)
@@ -212,6 +228,36 @@ def run(argv, until, *, env=None, input=None):
         details = ' '.join(diagnostics) or 'No recognized diagnostic. Inspect locally with doctor or logs; do not publish raw logs.'
         raise Failure(f'{Path(argv[0]).name} failed ({process.returncode}). {details}')
     return output
+
+
+def host_architecture(until):
+    system = platform.system()
+    machine = platform.machine()
+    if system != 'Darwin':
+        return HostArchitecture(system, machine, machine, False)
+    try:
+        arm64 = run(['/usr/sbin/sysctl', '-in', 'hw.optional.arm64'], until).strip()
+    except Failure as error:
+        raise Failure('Physical host architecture evidence is inconclusive.', error.code if error.code == 4 else 3) from error
+    if arm64 not in {'0', '1'}:
+        raise Failure('Physical host architecture evidence is inconclusive.', 3)
+    hardware = 'arm64' if arm64 == '1' else 'x86_64'
+    if machine != 'x86_64' or hardware != 'arm64':
+        return HostArchitecture(system, machine, hardware, False)
+    try:
+        translated_value = run(['/usr/sbin/sysctl', '-in', 'sysctl.proc_translated'], until).strip()
+    except Failure as error:
+        raise Failure('Rosetta translation evidence is inconclusive.', error.code if error.code == 4 else 3) from error
+    if translated_value not in {'0', '1'}:
+        raise Failure('Rosetta translation evidence is inconclusive.', 3)
+    return HostArchitecture(system, machine, hardware, translated_value == '1')
+
+
+def container_runtime_probe():
+    contents = (ROOT / 'config/container-runtime-state.sh').read_text()
+    if not contents.startswith('#!/bin/bash\n'):
+        raise Failure('Reviewed container runtime probe is missing or malformed.', 3)
+    return contents.split('\n', 1)[1]
 
 
 def validate_config(config):
@@ -548,13 +594,13 @@ sudo -n stat -c '%u:%a' /var/lib/ci-vm
 
 
 def idle(config, until):
-    script = USER_ENV + '''ctl show "$unit" --property=ActiveState,SubState,MainPID,ControlPID,ControlGroup,Job
+    script = USER_ENV + container_runtime_probe() + '''
+ctl show "$unit" --property=ActiveState,SubState,MainPID,ControlPID,ControlGroup,Job
 printf 'Paused='
 if sudo -n test -f /var/lib/ci-vm/paused && sudo -n test ! -L /var/lib/ci-vm/paused; then echo yes; else echo no; fi
 printf 'Runners='
 ps -eo comm= | awk '$1 == "Runner.Listener" || $1 == "Runner.Worker" {n++} END {print n+0}'
-printf 'Containers='
-docker_ci ps -q | awk 'END {print NR+0}'
+ci_vm_container_runtime_state "$user" "$uid"
 printf 'Jobs='
 ctl list-jobs --no-legend --no-pager | awk 'END {print NR+0}'
 printf 'CgroupEmpty='
@@ -572,12 +618,12 @@ CGROUP
 fi
 '''
     data = fields(guest(config, script, until))
-    required = {'ActiveState', 'SubState', 'MainPID', 'ControlPID', 'ControlGroup', 'Job', 'Paused', 'Runners', 'Containers', 'Jobs', 'CgroupEmpty'}
-    if data.keys() != required or data['Paused'] not in {'yes', 'no'} or data['CgroupEmpty'] not in {'yes', 'no'}:
+    required = {'ActiveState', 'SubState', 'MainPID', 'ControlPID', 'ControlGroup', 'Job', 'Paused', 'Runners', 'Containers', 'RuntimeDrift', 'Jobs', 'CgroupEmpty'}
+    if data.keys() != required or data['Paused'] not in {'yes', 'no'} or data['RuntimeDrift'] not in {'yes', 'no'} or data['CgroupEmpty'] not in {'yes', 'no'}:
         raise Failure('Idle probe is inconclusive.', 3)
     if any(not data[key].isdigit() for key in ('MainPID', 'ControlPID', 'Runners', 'Containers', 'Jobs')):
         raise Failure('Idle probe returned unknown counts.', 3)
-    return data['ActiveState'] == 'inactive' and data['SubState'] == 'dead' and data['MainPID'] == data['ControlPID'] == data['Runners'] == data['Containers'] == data['Jobs'] == '0' and data['Job'] in {'', '0'} and data['Paused'] == data['CgroupEmpty'] == 'yes'
+    return data['ActiveState'] == 'inactive' and data['SubState'] == 'dead' and data['MainPID'] == data['ControlPID'] == data['Runners'] == data['Containers'] == data['Jobs'] == '0' and data['Job'] in {'', '0'} and data['Paused'] == data['CgroupEmpty'] == 'yes' and data['RuntimeDrift'] == 'no'
 
 
 def group_contract(selection, until):
@@ -744,8 +790,14 @@ def report(config, command, until, lines=100):
     if command != 'doctor':
         return
     failures = []
-    print(f'Host: {platform.system()} {platform.machine()}')
-    if platform.system() != 'Darwin' or platform.machine() != 'arm64':
+    try:
+        architecture = host_architecture(until)
+        print('Host: ' + architecture.display())
+    except Failure as error:
+        architecture = None
+        print('Host: architecture evidence inconclusive')
+        failures.append(str(error))
+    if architecture is not None and not architecture.supported:
         failures.append('Host is not macOS Apple Silicon.')
     print(lima(config, ['--version'], until).strip())
     try:
@@ -945,7 +997,8 @@ def install(args):
             raise Failure('Provisioning uses the supplied ci UID 1001 service contract. Custom identities are adoption-only.', 2)
         if not args.yes_create_vm:
             raise Failure('Provisioning requires --yes-create-vm.', 2)
-        if platform.system() != 'Darwin' or platform.machine() != 'arm64':
+        architecture = host_architecture(until)
+        if not architecture.supported:
             raise Failure('Provisioning requires an Apple Silicon Mac.', 2)
         validate_lima_socket_path(lima_home, vm)
         if existing or state != 'Absent' or (Path(lima_home) / vm).exists() or (Path(lima_home) / vm).is_symlink():
@@ -1298,17 +1351,17 @@ def setup_guide(config, repo):
     identity = f'VM {config["vm"]} | user {config["guest_user"]} | UID {config["guest_uid"]} | unit {config["unit"]}'
     subtitle = 'Read-only guide. No commands below were executed; setup is not verified.'
     command = f'ci-vm --repo {repo}' if config['version'] == 2 or 'repo' in config else 'ci-vm --legacy'
-    register_command = command + ' register' + (' --manual-token ' + repo if config['version'] == VERSION else '')
+    register_command = command + ' register' + (' --manual-token ' + repo if config['version'] == VERSION else '') + (' --all-repos' if isinstance(config, Selection) and len(config.members) > 1 else '')
     resume_command = command + ' resume' + (' --all-repos' if isinstance(config, Selection) and len(config.members) > 1 else '')
     if isinstance(config, Selection) and len(config.members) > 1:
         print('Shared VM repositories: ' + ', '.join(affected_repositories(config)))
-        print('Pause/resume/restart and package application require --all-repos and affect every repository.')
+        print('Registration, pause, resume, restart, and package application require --all-repos and affect every repository.')
         print('Jobs can run concurrently and share the CI account, packages, Docker, ports, caches, resources, and trust.')
     if config['version'] == 3:
         key = profile_key(repo)
         print_sections('Prepare the reserved member', 'Keep the whole VM paused through registration readiness.', (
             ('Exact member identity', (f'RUNNER_KEY={key}', f'Unit {config["unit"]}', f'Runner directory /home/ci/runners/{key}', f'Work directory /home/ci/work/{key}')),
-            ('Reviewed guest helper', (str(ROOT / 'config/prepare-shared-runner.sh'), str(ROOT / 'config/ci-vm-runner@.service'), 'The agent prepares the reserved member with the reviewed helper.', 'register stages these exact files, enables the inactive unit, and finishes only this matching gate.')),
+            ('Reviewed guest helper', (str(ROOT / 'config/prepare-shared-runner.sh'), str(ROOT / 'config/container-runtime-state.sh'), str(ROOT / 'config/ci-vm-runner@.service'), 'The agent prepares the reserved member with the reviewed helper.', 'register stages these exact files, enables the inactive unit, and finishes only this matching gate.')),
         ))
     if not managed:
         sections = (
@@ -1615,8 +1668,10 @@ def finish_shared_registration(config, target, until):
         raise Failure('Cannot establish a fresh shared-registration staging directory.', 3)
     helper = ROOT / 'config/prepare-shared-runner.sh'
     template = ROOT / 'config/ci-vm-runner@.service'
+    runtime_probe = ROOT / 'config/container-runtime-state.sh'
     lima(config, ['copy', str(helper), f'{config["vm"]}:{stage}/prepare-shared-runner.sh'], until)
     lima(config, ['copy', str(template), f'{config["vm"]}:{stage}/ci-vm-runner@.service'], until)
+    lima(config, ['copy', str(runtime_probe), f'{config["vm"]}:{stage}/container-runtime-state.sh'], until)
     lima(config, ['shell', config['vm'], '--', 'sudo', 'bash', stage + '/prepare-shared-runner.sh',
                   'finish', target.shared_key, '--registration-ready'], until)
     lima(config, ['shell', config['vm'], '--', 'rm', '-rf', '--', stage], until)
@@ -1675,7 +1730,8 @@ def manual_register_runner(config, target, until):
         print('Manual fallback registration completed. The VM remains paused. Rerun register without --manual-token to reconcile the exact runner and finish setup.')
 
 
-def register_runner(config, until, repo=None, manual_token=False):
+def register_runner(config, until, repo=None, manual_token=False, all_repos=False):
+    mutation_scope(config, all_repos)
     if config['version'] not in {VERSION, 2, 3} or (config['guest_user'], config['guest_uid']) != ('ci', 1001):
         raise Failure('Registration requires a supported profile and the supplied ci UID 1001 account.', 3)
     target = registration_target(config, repo)
@@ -1776,6 +1832,7 @@ def main(argv=None):
         if name == 'register':
             sub.add_argument('repo', nargs='?', type=repository_value, metavar='OWNER/REPO', help='required only for an unassigned legacy profile')
             sub.add_argument('--manual-token', action='store_true', help='troubleshooting fallback; open an uncaptured token prompt')
+            sub.add_argument('--all-repos', action='store_true', help='acknowledge effects on every repository sharing the selected VM')
         if name == 'logs':
             sub.add_argument('--lines', type=int, choices=range(1, 1001), default=100, metavar='1..1000')
         if name in {'pause', 'resume', 'restart', 'packages'}:
@@ -1838,7 +1895,7 @@ def main(argv=None):
         return 0
     if args.command == 'register':
         with operation_lock():
-            register_runner(load_config(args.selected_repo, args.legacy), deadline(args.timeout), args.repo, args.manual_token)
+            register_runner(load_config(args.selected_repo, args.legacy), deadline(args.timeout), args.repo, args.manual_token, args.all_repos)
         return 0
     until = deadline(args.timeout)
     if args.command in {'pause', 'resume', 'restart'}:

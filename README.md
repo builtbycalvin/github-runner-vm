@@ -60,7 +60,7 @@ The agent uses `--share-with` after checking compatibility and pausing the exist
 Each repository gets a separate runner registration and workspace, including repositories owned by different personal accounts.
 They share the CI account, packages, Docker daemon, ports, and VM resources. Their jobs may run concurrently.
 Share only mutually trusted repositories whose workflows tolerate those shared resources. Separate directories do not isolate their credentials or files.
-Pause, resume, restart, and package changes affect every repository in that VM. The agent names them before acting and uses `--all-repos` to acknowledge the scope.
+Registration, pause, resume, restart, and package changes affect every repository in that VM. The agent names them before acting and uses `--all-repos` to acknowledge the scope.
 Adding a repository keeps the shared VM paused until its setup and registration are complete.
 
 New VMs start with 2 CPUs, 2 GiB RAM, and a 20 GiB virtual disk cap.

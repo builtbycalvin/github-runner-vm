@@ -10,7 +10,7 @@ Profiles have dedicated VMs by default. Explicit shared profiles use the same VM
 ## Maintain a shared VM
 
 Inspect `ci-vm profiles` and the selected repository's `status` before proposing a change.
-Shared pause, resume, restart, and package application require `--all-repos`. The command lists every affected repository.
+Shared registration, pause, resume, restart, and package application require `--all-repos`. The command lists every affected repository.
 Shared resume requires the complete group to be paused and idle, even on a repeated request. Pause and wait for every runner to drain before resuming; an already active member is not treated as successful idempotent resume.
 Authorization must cover those repositories. A flag does not extend a grant for one repository to its siblings.
 
@@ -22,7 +22,7 @@ ci-vm --repo OWNER/REPO resume --all-repos
 ```
 
 Execute only the approved steps. Package installation does not imply approval for restart or resume.
-Each listener can accept one final job while pause is pending. Complete idleness requires every member service and cgroup to be empty, plus no remaining runner processes, containers, or service jobs.
+Each listener can accept one final job while pause is pending. Complete idleness requires every member service and cgroup to be empty, plus no remaining runner processes, containers, service jobs, unsupported runtime sockets, or container daemons outside the managed `ci` rootless Docker service.
 The CLI compares host membership with persistent guest unit files and runtime units. Missing or extra members refuse maintenance even if the selected runner looks idle.
 A synchronous partial resume failure restores the pause marker. Already-started listeners drain naturally. A submitted start request is not proof of an online runner.
 
@@ -352,7 +352,7 @@ After confirming the exact files belong to this installation, remove only `~/.lo
 
 - `ci_vm.py` and `ci_vm_checks.py`
 - `config/lima.yaml`, `config/provision.sh`, and `config/ci-vm-runner.service`
-- `config/ci-vm-runner@.service` and `config/prepare-shared-runner.sh`
+- `config/ci-vm-runner@.service`, `config/prepare-shared-runner.sh`, and `config/container-runtime-state.sh`
 - `docs/setup.md`, `docs/llm-setup.md`, `docs/maintenance.md`, and `docs/security.md`
 - `examples/smoke.yml`
 

@@ -68,6 +68,7 @@ Profiles reject accidental duplicate physical VM bindings and malformed shared r
 They do not make untrusted code safe, and saved repository metadata does not prove a GitHub registration.
 Creation sizing flags change only CPU, memory, and disk capacity. They do not permit arbitrary mounts, forwarding, or network settings.
 GitHub runs one job per listener, but containers and files can outlive that job.
+Runtime checks fail closed when another user or root owns a container daemon, a second runtime socket is present, an unsupported runtime is active, or complete evidence cannot be collected.
 Shared ports and global cleanup are still hazards.
 The pause gate does not serialize unrelated services or defend against a compromised CI account.
 Shared maintenance checks the full managed unit inventory and every member's cgroup. An extra, missing, or changed unit refuses disruptive work.

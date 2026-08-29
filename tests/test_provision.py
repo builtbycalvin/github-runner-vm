@@ -85,14 +85,27 @@ class SharedPreparationTests(unittest.TestCase):
         self.staging = self.root / 'staging'
         for path in (self.state, self.units, self.tools, self.staging):
             path.mkdir()
+        self.runtime = self.root / 'run/user/1001'
+        self.runtime.mkdir(parents=True)
+        (self.runtime / 'docker.sock').touch()
+        self.docker_fragment = self.root / 'ci/.config/systemd/user/docker.service'
+        self.docker_fragment.parent.mkdir(parents=True)
+        self.docker_fragment.write_text('[Service]\nExecStart=dockerd-rootless.sh\n')
+        self.docker_cgroup = '/user.slice/user-1001.slice/user@1001.service/app.slice/docker.service'
+        for pid in ('10', '11'):
+            process = self.root / 'proc' / pid
+            process.mkdir(parents=True)
+            (process / 'cgroup').write_text('0::' + self.docker_cgroup + '\n')
         (self.state / 'paused').touch()
         self.key = 'other-repo-123456abcdef'
         self.unit = 'ci-vm-runner@' + self.key + '.service'
         self.control = self.root / 'control.json'
         self.control.write_text('{}')
         replacements = {'/var/lib/ci-vm': str(self.state), '/etc/systemd/user': str(self.units),
-                        '/home/ci': str(self.root / 'ci'), '/sys/fs/cgroup': str(self.root / 'cgroups')}
-        for name in ('prepare-shared-runner.sh', 'ci-vm-runner@.service', 'ci-vm-runner.service'):
+                        '/home/ci': str(self.root / 'ci'), '/home/$user': str(self.root / 'ci'), '/sys/fs/cgroup': str(self.root / 'cgroups'),
+                        '/run/user': str(self.root / 'run/user'), '/proc/': str(self.root / 'proc') + '/',
+                        'runtime_base=/run': 'runtime_base=' + str(self.root / 'run')}
+        for name in ('prepare-shared-runner.sh', 'container-runtime-state.sh', 'ci-vm-runner@.service', 'ci-vm-runner.service'):
             text = (ROOT / 'config' / name).read_text()
             for original, replacement in replacements.items():
                 text = text.replace(original, replacement)
@@ -116,6 +129,8 @@ elif name == 'stat':
     fmt = args[1]
     if str(path) == state.get('bad_owner'): print('1001:777')
     elif fmt == '%u': print('0')
+    elif fmt == '%u:%g': print(state.get('socket_owner', '1001:1001'))
+    elif path.name == 'docker.service' and fmt == '%u:%g:%a': print('1001:1001:644')
     elif fmt == '%u:%g:%a': print('1001:1001:700')
     else: print('0:' + oct(path.stat().st_mode & 0o777)[2:])
 elif name == 'flock':
@@ -123,7 +138,11 @@ elif name == 'flock':
 elif name == 'readlink':
     print(pathlib.Path(args[-1]).resolve())
 elif name == 'ps':
-    print(state.get('processes', ''))
+    print(state.get('runtime_processes', '10 1001 dockerd\n11 1001 containerd') if any('uid=' in arg for arg in args) else state.get('processes', ''))
+elif name == 'find' and str(root / 'run') in args:
+    print(state.get('runtime_sockets', str(root / 'run/user/1001/docker.sock')))
+elif name == 'find':
+    os.execv('/usr/bin/find', ['find', *args])
 elif name == 'cat':
     path = pathlib.Path(args[-1])
     if path.name == 'cgroup.procs' and state.get('fail_cgroup_read'): sys.exit(8)
@@ -135,8 +154,8 @@ elif name == 'install':
     if state.get('fail_after_directory') == path.name: sys.exit(8)
 elif name == 'runuser':
     if 'docker' in args:
-        if state.get('fail_docker'): sys.exit(8)
-        print(state.get('containers', ''))
+        if state.get('fail_docker') or state.get('fail_docker_info') and 'info' in args or state.get('fail_docker_ps') and 'ps' in args: sys.exit(8)
+        sys.stdout.write('["name=rootless"]\n' if 'info' in args else state.get('containers', ''))
         sys.exit(0)
     args = args[args.index('systemctl') + 2:]
     action = args[0]
@@ -159,13 +178,25 @@ elif name == 'runuser':
         values = {'FragmentPath': str(root / 'units' / unit), 'LoadState': 'loaded', 'DropInPaths': '',
                   'NeedDaemonReload': state.get('reload', 'no'), 'Transient': 'no', 'ActiveState': 'inactive',
                   'SubState': 'dead', 'MainPID': '0', 'ControlPID': '0', 'Job': '', 'ControlGroup': ''}
+        if unit == 'docker.service':
+            values.update({'FragmentPath': str(root / 'ci/.config/systemd/user/docker.service'), 'ActiveState': 'active',
+                           'SubState': 'running', 'ControlGroup': state.get('docker_cgroup', '/user.slice/user-1001.slice/user@1001.service/app.slice/docker.service')})
         values.update(state.get('properties', {}).get(unit, {}))
         print(values[prop])
     else: sys.exit(7)
+elif name == 'systemctl':
+    unit = args[1]
+    prop = next(a.split('=', 1)[1] for a in args if a.startswith('--property='))
+    if state.get('fail_system_unit') == unit: sys.exit(8)
+    values = {'LoadState': 'masked', 'UnitFileState': 'masked', 'ActiveState': 'inactive'}
+    values.update(state.get('system_units', {}).get(unit, {}))
+    print(values[prop])
+elif name == 'sudo':
+    os.execvp(args[1], args[1:])
 else: sys.exit(6)
 ''')
         stub.chmod(0o755)
-        for name in ('id', 'stat', 'flock', 'readlink', 'ps', 'cat', 'install', 'runuser'):
+        for name in ('id', 'stat', 'flock', 'readlink', 'ps', 'find', 'cat', 'install', 'runuser', 'systemctl', 'sudo'):
             (self.tools / name).symlink_to(stub)
         self.env = dict(os.environ, SHARED_TEST_ROOT=str(self.root), PATH=str(self.tools) + os.pathsep + '/usr/bin:/bin')
 
@@ -174,6 +205,11 @@ else: sys.exit(6)
         if ready:
             args.append('--registration-ready')
         return subprocess.run(args, env=self.env, capture_output=True, text=True, timeout=15)
+
+    def probe(self):
+        command = 'source "$1"; ci_vm_container_runtime_state ci 1001'
+        return subprocess.run(['bash', '-c', command, 'probe', str(self.staging / 'container-runtime-state.sh')],
+                              env=self.env, capture_output=True, text=True, timeout=15)
 
     def update(self, **values):
         state = json.loads(self.control.read_text())
@@ -189,7 +225,7 @@ else: sys.exit(6)
     def test_prepare_finish_and_exact_reruns_preserve_registration(self):
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('run ci-vm register for the selected repository profile', result.stdout)
+        self.assertIn('run ci-vm register --all-repos for the selected repository profile', result.stdout)
         self.assertNotIn('enable the exact unit', result.stdout)
         self.assertNotIn('--registration-ready', result.stdout)
         gate = self.state / 'shared-setup'
@@ -239,6 +275,39 @@ else: sys.exit(6)
         self.assertNotEqual(self.invoke().returncode, 0)
         self.assertFalse((self.state / 'shared-setup').exists())
         self.assertEqual((target / 'existing').read_text(), 'preserve')
+
+    def test_container_runtime_drift_refuses_shared_preparation(self):
+        expected = str(self.root / 'run/user/1001/docker.sock')
+        cases = (
+            {'runtime_processes': '10 0 dockerd\n11 1001 containerd'},
+            {'runtime_processes': '10 1001 dockerd\n11 1001 containerd\n12 1002 podman'},
+            {'runtime_processes': '10 1001 dockerd\n11 1001 containerd\n12 0 systemd-nspawn'},
+            {'runtime_processes': '10 1001 dockerd'},
+            {'runtime_sockets': expected + '\n' + str(self.root / 'run/user/1002/docker.sock')},
+            {'socket_owner': '0:0'},
+            {'docker_cgroup': '/user.slice/user-1001.slice/user@1001.service/app.slice/other.service'},
+            {'system_units': {'docker.service': {'LoadState': 'loaded'}}},
+        )
+        for update in cases:
+            with self.subTest(update=update):
+                self.control.write_text(json.dumps(update))
+                result = self.invoke()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Container runtime state', result.stderr)
+                self.assertFalse((self.state / 'shared-setup').exists())
+
+    def test_runtime_probe_uses_privileged_boundary_and_preserves_docker_failures(self):
+        result = self.probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'Containers=0\nRuntimeDrift=no\n')
+        calls = [json.loads(line) for line in (self.root / 'calls.jsonl').read_text().splitlines()]
+        self.assertEqual(calls[0], ['sudo', ['-n', 'bash', '-s', '--', 'ci', '1001']])
+        find_call = next(call for call in calls if call[0] == 'find')
+        self.assertIn(str(self.runtime), find_call[1])
+        self.control.write_text(json.dumps({'fail_docker_ps': True}))
+        result = self.probe()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('Containers=0', result.stdout)
 
     def test_different_gate_or_nonmatching_unit_is_never_overwritten(self):
         gate = self.state / 'shared-setup'

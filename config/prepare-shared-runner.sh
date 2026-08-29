@@ -14,8 +14,11 @@ runner_parent=/home/ci/runners
 work_parent=/home/ci/work
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 template="$script_dir/ci-vm-runner@.service"
+runtime_probe="$script_dir/container-runtime-state.sh"
 unit="ci-vm-runner@$key.service"
 test -f "$template" && test ! -L "$template" || fail 'Missing reviewed service template.'
+test -f "$runtime_probe" && test ! -L "$runtime_probe" || fail 'Missing reviewed container runtime probe.'
+source "$runtime_probe"
 test "$(id -u ci):$(id -g ci):$(id -Gn ci)" = 1001:1001:ci || fail 'CI account differs.'
 test ! -L "$state" && test "$(stat -c '%u:%a' "$state")" = 0:755 || fail 'State directory differs.'
 test ! -L "$state/operation.lock" || fail 'Lock path is a symlink.'
@@ -74,11 +77,11 @@ check_unit() {
     fi
 }
 check_idle() {
-    local member inventory containers jobs loaded enabled processes
+    local member inventory runtime_state jobs loaded enabled processes
     processes=$(ps -eo comm= | awk '$1 == "Runner.Listener" || $1 == "Runner.Worker" {n++} END {print n+0}')
     test "$processes" = 0 || fail 'Runner processes remain.'
-    containers=$(runuser -u ci -- env XDG_RUNTIME_DIR=/run/user/1001 DOCKER_HOST=unix:///run/user/1001/docker.sock docker ps -q)
-    test -z "$containers" || fail 'Containers remain.'
+    runtime_state=$(ci_vm_container_runtime_state ci 1001)
+    test "$runtime_state" = $'Containers=0\nRuntimeDrift=no' || fail 'Container runtime state is busy, unsupported, or inconclusive.'
     jobs=$(ctl list-jobs --no-legend --no-pager)
     test -z "$jobs" || fail 'Service jobs remain.'
     for member in "$unit_dir"/ci-vm-runner*.service; do check_unit "${member##*/}"; done
@@ -151,7 +154,7 @@ if test "$action" = prepare; then
     recovering=no
     check_unit "$unit"
     check_idle
-    printf '%s\n' "Prepared $unit. Shared setup gate remains set. Download the runner into /home/ci/runners/$key, then run ci-vm register for the selected repository profile. That transaction enables the inactive unit, finishes this gate, and leaves the VM paused."
+    printf '%s\n' "Prepared $unit. Shared setup gate remains set. Download the runner into /home/ci/runners/$key, then run ci-vm register --all-repos for the selected repository profile. That transaction enables the inactive unit, finishes this gate, and leaves the VM paused."
 else
     check_unit "$unit"
     test "$(ctl is-enabled "$unit")" = enabled || fail 'Enable the exact member unit without --now before finishing.'

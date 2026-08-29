@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_FILES = (
-    'install.sh', 'ci_vm.py', 'ci_vm_checks.py', 'config/lima.yaml', 'config/provision.sh', 'config/ci-vm-runner.service', 'config/ci-vm-runner@.service', 'config/prepare-shared-runner.sh',
+    'install.sh', 'ci_vm.py', 'ci_vm_checks.py', 'config/lima.yaml', 'config/provision.sh', 'config/ci-vm-runner.service', 'config/ci-vm-runner@.service', 'config/prepare-shared-runner.sh', 'config/container-runtime-state.sh',
     'docs/setup.md', 'docs/maintenance.md', 'docs/security.md', 'docs/llm-setup.md', 'examples/smoke.yml',
 )
 spec = importlib.util.spec_from_file_location('ci_vm', ROOT / 'ci_vm.py')
@@ -354,7 +354,7 @@ elif args[0] == 'shell':
         phase = 'running' if args[8] == os.environ.get('FAKE_BUSY_UNIT') else os.environ.get('FAKE_PHASE', 'paused')
         print('ActiveState=' + ('inactive' if phase == 'paused' else 'active'))
         print('SubState=' + ('dead' if phase == 'paused' else 'running'))
-        print('MainPID=0\nControlPID=0\nControlGroup=\nJob=0\nPaused=yes\nRunners=0\nContainers=0\nJobs=0\nCgroupEmpty=yes')
+        print('MainPID=0\nControlPID=0\nControlGroup=\nJob=0\nPaused=yes\nRunners=0\nContainers=0\nRuntimeDrift=no\nJobs=0\nCgroupEmpty=yes')
     else:
         print('LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=123')
 else:
@@ -447,7 +447,7 @@ print(json.dumps(dict(id=int(os.environ.get('FAKE_ID', '7')), busy=False, status
 
     def test_ci_checks_every_shipped_shell_helper_and_committed_whitespace(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
-        self.assertIn('bash -n install.sh config/provision.sh config/prepare-shared-runner.sh', workflow)
+        self.assertIn('bash -n install.sh config/provision.sh config/prepare-shared-runner.sh config/container-runtime-state.sh', workflow)
         self.assertIn('git diff --check "$(git hash-object -t tree /dev/null)" HEAD', workflow)
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
@@ -915,7 +915,7 @@ chown() { :; }
                 patch.object(cli, 'vm_state', return_value='Running'), patch.object(cli, 'ensure_no_package_work'), \
                 patch.object(cli, 'shared_setup_gate', return_value=False), patch.object(cli, 'group_contract') as contract:
             with self.assertRaises(cli.Failure) as failure:
-                cli.register_runner(shared, cli.deadline(1), manual_token=True)
+                cli.register_runner(shared, cli.deadline(1), manual_token=True, all_repos=True)
             self.assertIn('preparation gate is missing', str(failure.exception))
             contract.assert_not_called()
 
@@ -1149,7 +1149,7 @@ chown() { :; }
                 patch.object(cli, 'local_registration', return_value=local), patch.object(cli, 'github_runners', return_value=(remote,)), \
                 patch.object(cli, 'persist_runner_id'), patch.object(cli, 'enable_registration_unit', side_effect=lambda *_: order.append('enable')), \
                 patch.object(cli, 'finish_shared_registration', side_effect=lambda *_: order.append('finish')), patch('sys.stdout', io.StringIO()):
-            cli.register_runner(member, cli.deadline(1))
+            cli.register_runner(member, cli.deadline(1), all_repos=True)
         self.assertEqual(order, ['enable', 'finish'])
 
     def test_enable_registration_unit_never_starts_listener(self):
@@ -1287,17 +1287,19 @@ chown() { :; }
         selection = self.shared_selection()
         target = cli.registration_target(selection)
         stage = '/tmp/ci-vm-register.ABC123'
-        with patch.object(cli, 'lima', side_effect=[stage + '\n', '', '', '', '']) as lima:
+        with patch.object(cli, 'lima', side_effect=[stage + '\n', '', '', '', '', '']) as lima:
             cli.finish_shared_registration(selection, target, cli.deadline(1))
         calls = [call.args[1] for call in lima.call_args_list]
         self.assertEqual(calls[1][0], 'copy')
         self.assertTrue(calls[1][1].endswith('prepare-shared-runner.sh'))
         self.assertEqual(calls[2][0], 'copy')
         self.assertTrue(calls[2][1].endswith('ci-vm-runner@.service'))
-        self.assertEqual(calls[3][-3:], ['finish', target.shared_key, '--registration-ready'])
-        self.assertEqual(calls[4], ['shell', selection['vm'], '--', 'rm', '-rf', '--', stage])
+        self.assertEqual(calls[3][0], 'copy')
+        self.assertTrue(calls[3][1].endswith('container-runtime-state.sh'))
+        self.assertEqual(calls[4][-3:], ['finish', target.shared_key, '--registration-ready'])
+        self.assertEqual(calls[5], ['shell', selection['vm'], '--', 'rm', '-rf', '--', stage])
 
-        with patch.object(cli, 'lima', side_effect=[stage + '\n', '', '', cli.Failure('finish failed')]) as lima:
+        with patch.object(cli, 'lima', side_effect=[stage + '\n', '', '', '', cli.Failure('finish failed')]) as lima:
             with self.assertRaises(cli.Failure):
                 cli.finish_shared_registration(selection, target, cli.deadline(1))
         self.assertFalse(any(call.args[1][:4] == ['shell', selection['vm'], '--', 'rm'] for call in lima.call_args_list))
@@ -1831,12 +1833,12 @@ chown() { :; }
             lima.assert_not_called()
 
     def idle_output(self, **changes):
-        state = dict(ActiveState='inactive', SubState='dead', MainPID='0', ControlPID='0', ControlGroup='', Job='0', Paused='yes', Runners='0', Containers='0', Jobs='0', CgroupEmpty='yes')
+        state = dict(ActiveState='inactive', SubState='dead', MainPID='0', ControlPID='0', ControlGroup='', Job='0', Paused='yes', Runners='0', Containers='0', RuntimeDrift='no', Jobs='0', CgroupEmpty='yes')
         state.update(changes)
         return ''.join(f'{key}={value}\n' for key, value in state.items())
 
     def test_each_restart_guard_is_required(self):
-        for change in ({'ActiveState': 'activating'}, {'SubState': 'auto-restart'}, {'MainPID': '5'}, {'ControlPID': '5'}, {'Job': '7'}, {'Paused': 'no'}, {'Runners': '1'}, {'Containers': '1'}, {'Jobs': '1'}, {'CgroupEmpty': 'no'}):
+        for change in ({'ActiveState': 'activating'}, {'SubState': 'auto-restart'}, {'MainPID': '5'}, {'ControlPID': '5'}, {'Job': '7'}, {'Paused': 'no'}, {'Runners': '1'}, {'Containers': '1'}, {'RuntimeDrift': 'yes'}, {'Jobs': '1'}, {'CgroupEmpty': 'no'}):
             with self.subTest(change=change), patch.object(cli, 'guest', return_value=self.idle_output(**change)):
                 self.assertFalse(cli.idle(self.config, cli.deadline(1)))
         with patch.object(cli, 'guest', return_value=self.idle_output()):
@@ -1855,6 +1857,38 @@ chown() { :; }
         self.assertIn('cat "$file"', script)
         result = subprocess.run(['bash', '-n'], input=script, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rosetta_process_is_recognized_as_apple_silicon(self):
+        with patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='x86_64'), \
+                patch.object(cli, 'run', return_value='1\n') as run:
+            host = cli.host_architecture(cli.deadline(1))
+        self.assertTrue(host.supported)
+        self.assertTrue(host.translated)
+        self.assertEqual(run.call_args.args[0], ['/usr/sbin/sysctl', '-in', 'sysctl.proc_translated'])
+
+    def test_host_architecture_sysctl_failures_are_inconclusive(self):
+        with patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='arm64'), \
+                patch.object(cli, 'run', side_effect=cli.Failure('sysctl failed')):
+            with self.assertRaises(cli.Failure) as failure:
+                cli.host_architecture(cli.deadline(1))
+            self.assertEqual(failure.exception.code, 3)
+            self.assertIn('inconclusive', str(failure.exception))
+        with patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='x86_64'), \
+                patch.object(cli, 'run', side_effect=['1\n', cli.Failure('sysctl failed')]):
+            with self.assertRaises(cli.Failure) as failure:
+                cli.host_architecture(cli.deadline(1))
+            self.assertEqual(failure.exception.code, 3)
+            self.assertIn('Rosetta', str(failure.exception))
+
+    def test_shared_registration_requires_all_repositories_scope(self):
+        selection = self.shared_selection()
+        with patch.object(cli, 'load_config', return_value=selection), patch.object(cli, 'manual_register_runner') as manual, patch.object(cli, 'operation_lock'):
+            with self.assertRaises(cli.Failure) as failure:
+                cli.main(['--repo', 'other/two', 'register'])
+            self.assertEqual(failure.exception.code, 2)
+            manual.assert_not_called()
+            self.assertEqual(cli.main(['--repo', 'other/two', 'register', '--manual-token', '--all-repos']), 0)
+        manual.assert_called_once()
 
     def test_stopped_resume_never_starts_vm(self):
         events = []

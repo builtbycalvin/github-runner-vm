@@ -26,7 +26,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Check shell syntax
         run: |
-          bash -n install.sh config/provision.sh config/prepare-shared-runner.sh
+          bash -n install.sh config/provision.sh config/prepare-shared-runner.sh config/container-runtime-state.sh
           sh -n bootstrap.sh
       - name: Check whitespace
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD

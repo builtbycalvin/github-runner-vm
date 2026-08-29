@@ -121,12 +121,13 @@ The existing profile and registration remain unchanged. The second repository ne
 
 Set `VM_NAME`, `RUNNER_KEY`, the unit name, and both directories from the setup output.
 Set `LIMA_HOME` to that profile's exact recorded path and export it before any `limactl` command. A VM name alone is not a complete identity.
-Copy only the reviewed helper and service template from this installed toolkit into a new temporary guest directory:
+Copy only the reviewed helper, runtime probe, and service template from this installed toolkit into a new temporary guest directory:
 
 ```sh
 export LIMA_HOME
 SHARED_STAGE="$(limactl shell "$VM_NAME" -- mktemp -d /tmp/ci-vm-shared.XXXXXX)"
 limactl cp "$HOME/.local/share/github-runner-vm/config/prepare-shared-runner.sh" \
+  "$HOME/.local/share/github-runner-vm/config/container-runtime-state.sh" \
   "$HOME/.local/share/github-runner-vm/config/ci-vm-runner@.service" \
   "$VM_NAME:$SHARED_STAGE/"
 limactl shell "$VM_NAME" -- sudo bash "$SHARED_STAGE/prepare-shared-runner.sh" prepare "$RUNNER_KEY"
@@ -141,7 +142,7 @@ As `ci`, download and verify the official ARM64 runner in the member's directory
 Then use the second repository's selected profile:
 
 ```sh
-ci-vm --repo OTHER_OWNER/SECOND register
+ci-vm --repo OTHER_OWNER/SECOND register --all-repos
 ```
 
 Follow the same authenticated registration rules as [the dedicated registration flow](#register-through-authenticated-github-cli).

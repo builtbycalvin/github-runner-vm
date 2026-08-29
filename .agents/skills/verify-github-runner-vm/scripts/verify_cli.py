@@ -57,6 +57,7 @@ GROUPS = {
     'sharing': [
         'InstallationTests.test_explicit_shared_attachment_rerun_and_cross_owner_selection',
         'InstallationTests.test_shared_attachment_requires_existing_idle_anchor_and_valid_reference',
+        'CommandTests.test_shared_registration_requires_all_repositories_scope',
         'CommandTests.test_shared_inventory_and_secondary_cgroups_refuse_mutation',
         'CommandTests.test_shared_resume_failure_restores_pause_and_setup_gate_blocks',
         'test_provision.SharedPreparationTests',
@@ -250,8 +251,8 @@ elif name == 'limactl' and args[:2] == ['shell', 'one'] and state:
         print('UnitHash=' + hashlib.sha256(content).hexdigest())
         print('UnitOwner=0:644\\nActualUID=1001\\nMarkerOwner=0:755')
     elif 'CgroupEmpty' in script:
-        print('ActiveState=inactive\\nSubState=dead\\nMainPID=0\\nControlPID=0\\nControlGroup=\\nJob=0\\nPaused=yes\\nRunners=0\\nContainers=0\\nJobs=0\\nCgroupEmpty=yes')
-    elif 'touch -- /var/lib/ci-vm/paused' in script:
+        print('ActiveState=inactive\\nSubState=dead\\nMainPID=0\\nControlPID=0\\nControlGroup=\\nJob=0\\nPaused=yes\\nRunners=0\\nContainers=0\\nRuntimeDrift=no\\nJobs=0\\nCgroupEmpty=yes')
+    elif 'ln -- "$temporary" "$marker"' in script:
         pass
     else:
         sys.exit(97)
