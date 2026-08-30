@@ -24,6 +24,7 @@ ARCHIVE_FILES = (
 spec = importlib.util.spec_from_file_location('ci_vm', ROOT / 'ci_vm.py')
 cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cli)
+SUPPORTED_DARWIN_ARM64 = cli.HostArchitecture('Darwin', 'arm64', 'arm64', False)
 
 
 class InstallationTests(unittest.TestCase):
@@ -1406,7 +1407,7 @@ chown() { :; }
                 def lima(config, args, until, input=None):
                     calls.append((dict(config), args))
                     return '[]' if args[0] == 'list' else 'limactl version 2.2.0' if args[0] == '--version' else ''
-                with patch.dict(os.environ, HOME=name), patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='arm64'), patch.object(cli, 'lima', side_effect=lima), patch('sys.stdout', io.StringIO()):
+                with patch.dict(os.environ, HOME=name), patch.object(cli, 'host_architecture', return_value=SUPPORTED_DARWIN_ARM64), patch.object(cli, 'lima', side_effect=lima), patch('sys.stdout', io.StringIO()):
                     self.assertEqual(cli.main(['--install', '--repo', 'Owner/Repo', '--provision', '--yes-create-vm', '--lima-home', lima_home, *options]), 0)
                     profile = home / '.config/github-runner-vm/profiles' / (cli.profile_key('owner/repo') + '.json')
                     config = json.loads(profile.read_text())
@@ -1442,7 +1443,7 @@ chown() { :; }
                 cli.validate_config(dict(profile, resources=resources))
 
     def test_creation_timeout_reserves_profile_and_never_recreates(self):
-        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, HOME=name), patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='arm64'), patch('sys.stdout', io.StringIO()):
+        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, HOME=name), patch.object(cli, 'host_architecture', return_value=SUPPORTED_DARWIN_ARM64), patch('sys.stdout', io.StringIO()):
             lima_home = '/tmp/ci-vm-' + hashlib.sha256(name.encode()).hexdigest()[:12]
             def lima(config, args, until, input=None):
                 if args[0] == 'start':
@@ -1486,8 +1487,8 @@ chown() { :; }
     def test_provisioning_cleans_fresh_reservation_after_definite_start_or_second_preflight_failure(self):
         for failure_at_start in (True, False):
             with self.subTest(failure_at_start=failure_at_start), tempfile.TemporaryDirectory() as name, \
-                    patch.dict(os.environ, HOME=name), patch.object(cli.platform, 'system', return_value='Darwin'), \
-                    patch.object(cli.platform, 'machine', return_value='arm64'), patch('sys.stdout', io.StringIO()):
+                    patch.dict(os.environ, HOME=name), patch.object(cli, 'host_architecture', return_value=SUPPORTED_DARWIN_ARM64), \
+                    patch('sys.stdout', io.StringIO()):
                 lima_home = '/tmp/ci-vm-' + hashlib.sha256(name.encode()).hexdigest()[:12]
                 def lima(config, args, until, input=None):
                     if args[0] == 'list':
@@ -1502,6 +1503,7 @@ chown() { :; }
                     with self.assertRaises(cli.Failure) as failure:
                         cli.main(['--install', '--repo', 'owner/repo', '--provision', '--yes-create-vm', '--lima-home', lima_home])
                 self.assertEqual(failure.exception.code, 3)
+                self.assertEqual(str(failure.exception), 'start failed' if failure_at_start else 'inherited config')
                 profile = Path(name) / '.config/github-runner-vm/profiles' / (cli.profile_key('owner/repo') + '.json')
                 self.assertFalse(profile.exists())
 
@@ -1532,7 +1534,7 @@ chown() { :; }
         self.assertLessEqual(instance_path + cli.LIMA_SOCKET_COMPONENT_RESERVE + 1, cli.DARWIN_UNIX_PATH_BYTES)
 
     def test_provisioning_refuses_oversized_socket_path_before_profile_write(self):
-        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, HOME=name), patch.object(cli.platform, 'system', return_value='Darwin'), patch.object(cli.platform, 'machine', return_value='arm64'), patch.object(cli, 'lima', return_value='[]') as lima:
+        with tempfile.TemporaryDirectory() as name, patch.dict(os.environ, HOME=name), patch.object(cli, 'host_architecture', return_value=SUPPORTED_DARWIN_ARM64), patch.object(cli, 'lima', return_value='[]') as lima:
             with self.assertRaises(cli.Failure) as failure:
                 cli.main(['--install', '--repo', 'owner/repo', '--provision', 'x' * 80, '--yes-create-vm'])
             self.assertIn('Unix socket path limit', str(failure.exception))
