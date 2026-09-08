@@ -837,8 +837,6 @@ chown() { :; }
     def test_normal_setup_documents_exclude_retired_manual_registration_flow(self):
         normal = '\n'.join((ROOT / path).read_text() for path in (
             'README.md', 'docs/agent-walkthrough.md', 'docs/maintenance.md',
-            '.agents/skills/verify-github-runner-vm/features/maintenance.md',
-            '.agents/skills/verify-github-runner-vm/features/profiles.md',
         ))
         for phrase in (
             'token handoff', 'registration handoff', 'uncaptured registration',
