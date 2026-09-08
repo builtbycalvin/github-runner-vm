@@ -45,8 +45,6 @@ This repository's `.github/workflows/` must use GitHub-hosted runners. The self-
 
 ## Verification
 
-Use `.agents/skills/verify-github-runner-vm/SKILL.md` for reproducible installed-CLI terminal evidence and its maintained feature map. Its default temporary-home proof does not touch live VMs or GitHub.
-
 Run `python3 -m unittest discover -s tests -v` and `git diff --check`.
 Run `bash -n` separately on `install.sh`, `config/provision.sh`, `config/prepare-shared-runner.sh`, and `config/container-runtime-state.sh`.
 Run `sh -n bootstrap.sh` and test downloads with fake curl in a temporary home. Do not execute the published bootstrap during local tests.
